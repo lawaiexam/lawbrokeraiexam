@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.env
+lawbroker_venv/
+sort_venv/
+
+# Streamlit
+.streamlit/
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/

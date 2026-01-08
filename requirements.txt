@@ -1,0 +1,22 @@
+# --- Core ---
+streamlit>=1.32
+pandas>=2.0
+
+# --- Excel / File handling ---
+openpyxl>=3.1
+xlrd>=2.0
+
+# --- HTTP / API ---
+requests>=2.31
+
+# --- Database ---
+mysql-connector-python>=8.3
+
+# --- AI (Gemini) ---
+google-generativeai>=0.4
+
+# --- Image handling ---
+Pillow>=10.0
+
+# --- Utilities ---
+python-dateutil>=2.8
