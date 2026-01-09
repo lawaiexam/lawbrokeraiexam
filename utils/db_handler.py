@@ -6,30 +6,33 @@ import streamlit as st
 from datetime import datetime
 import json
 
+# =========================
+# DB Connection
+# =========================
 def get_connection():
-    """建立 MySQL 連線"""
     try:
         conf = st.secrets["mysql"]
-        connection = mysql.connector.connect(
+        return mysql.connector.connect(
             host=conf["host"],
             database=conf["database"],
             user=conf["user"],
             password=conf["password"],
-            port=conf.get("port", 3306)
+            port=conf.get("port", 3306),
         )
-        return connection
     except Error as e:
         st.error(f"無法連接到 MySQL 資料庫: {e}")
         return None
 
-def init_db():
-    """初始化資料庫：自動建立資料表"""
-    conn = get_connection()
-    if conn is None: return
 
+# =========================
+# Init DB（只負責建基本表）
+# =========================
+def init_db():
+    conn = get_connection()
+    if conn is None:
+        return
     cursor = conn.cursor()
-    
-    # 1. 建立員工資料表 (users)
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             emp_id VARCHAR(50) PRIMARY KEY,
@@ -38,120 +41,149 @@ def init_db():
             department VARCHAR(50)
         )
     """)
-    
-    # 2. 建立考試紀錄表 (records)
-    # 使用 JSON 欄位存錯題 (MySQL 5.7+ 支援 JSON 格式，若太舊可用 TEXT)
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS records (
             id INT AUTO_INCREMENT PRIMARY KEY,
             emp_id VARCHAR(50),
-            bank_type VARCHAR(50),
+            bank_type VARCHAR(100),
             score FLOAT,
             duration_seconds INT,
-            wrong_log JSON, 
+            wrong_log JSON,
             exam_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+            section_scores JSON NULL,
+            total_score INT NULL,
+            passed TINYINT(1) NULL,
+            fail_reason VARCHAR(50) NULL,
             FOREIGN KEY (emp_id) REFERENCES users(emp_id)
         )
     """)
 
-    # --- 預設塞入一些假員工資料 (方便測試) ---
-    cursor.execute("SELECT count(*) FROM users")
+    cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
-        val = [
-            ("ZZ0001", "王小明", "@Zz@0001", "業務一部"),
-            ("ZZ0002", "李大華", "@Zz@0002", "業務二部"),
-            ("admin", "管理員", "admin888", "總務部")
-        ]
-        stmt = "INSERT INTO users (emp_id, name, password, department) VALUES (%s, %s, %s, %s)"
-        cursor.executemany(stmt, val)
-        print("已建立預設使用者資料")
+        cursor.executemany(
+            "INSERT INTO users (emp_id, name, password, department) VALUES (%s, %s, %s, %s)",
+            [
+                ("ZZ0001", "王小明", "@Zz@0001", "業務一部"),
+                ("ZZ0002", "李大華", "@Zz@0002", "業務二部"),
+                ("admin", "管理員", "admin888", "總務部"),
+            ],
+        )
         conn.commit()
 
     cursor.close()
     conn.close()
 
+
+# =========================
+# Auth
+# =========================
 def login_user(emp_id, password):
-    """驗證登入"""
     conn = get_connection()
-    if not conn: return None
-    
-    cursor = conn.cursor(dictionary=True) # 回傳字典格式
-    # 注意：正式環境建議密碼要 Hash，這裡先用明碼示範
-    stmt = "SELECT emp_id, name, department FROM users WHERE emp_id = %s AND password = %s"
-    cursor.execute(stmt, (emp_id, password))
+    if not conn:
+        return None
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT emp_id, name, department FROM users WHERE emp_id=%s AND password=%s",
+        (emp_id, password),
+    )
     user = cursor.fetchone()
-    
     cursor.close()
     conn.close()
-    return user # 若無查到會回傳 None
+    return user
 
-def save_exam_record(emp_id, bank_type, score, duration, wrong_df):
-    """
-    將考試紀錄寫入 MySQL
-    :param wrong_df: 包含錯題資訊的 DataFrame，必須包含 Choices 與 Explanation
-    """
+
+# =========================
+# Save Exam Record
+# =========================
+def save_exam_record(
+    emp_id,
+    bank_type,
+    score,
+    duration,
+    wrong_df,
+    section_scores=None,
+    total_score=None,
+    passed=None,
+    fail_reason=None,
+):
     conn = get_connection()
     if conn is None:
         return
-
     cursor = conn.cursor()
-    
-    # --- [BUG FIX 2-2] 修正資料欄位過濾 ---
-    # 確保寫入的 JSON 包含 AI 詳解所需的欄位 (Choices, Explanation)
-    if not wrong_df.empty:
-        # 定義需要保留的欄位
+
+    if isinstance(wrong_df, pd.DataFrame) and not wrong_df.empty:
         desired_cols = [
-            "ID", "Question", "Your Answer", "Correct", "Tag", 
-            "Choices", "Explanation"  # <--- 關鍵：補上這兩個欄位
+            "ID", "Tag", "Question", "Type",
+            "Choices", "YourAnswer", "CorrectAnswer", "Explanation"
         ]
-        
-        # 僅保留實際存在於 DataFrame 的欄位，避免報錯
-        valid_cols = [col for col in desired_cols if col in wrong_df.columns]
-        
-        # 轉成 JSON，force_ascii=False 確保中文可讀
+        valid_cols = [c for c in desired_cols if c in wrong_df.columns]
         wrong_json = wrong_df[valid_cols].to_json(orient="records", force_ascii=False)
     else:
         wrong_json = "[]"
 
     stmt = """
-        INSERT INTO records (emp_id, bank_type, score, duration_seconds, wrong_log, exam_date)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO records
+        (emp_id, bank_type, score, duration_seconds, wrong_log, exam_date,
+         section_scores, total_score, passed, fail_reason)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """
-    val = (emp_id, bank_type, score, int(duration), wrong_json, datetime.now())
-    
-    try:
-        cursor.execute(stmt, val)
-        conn.commit()
-        # st.success("✅ 成績已成功上傳資料庫！") # Debug 用，生產環境可註解
-    except Error as e:
-        st.error(f"⚠️ 寫入資料庫失敗: {e}")
-    finally:
-        cursor.close()
-        conn.close()
 
+    cursor.execute(
+        stmt,
+        (
+            emp_id,
+            bank_type,
+            score,
+            int(duration),
+            wrong_json,
+            datetime.now(),
+            json.dumps(section_scores, ensure_ascii=False) if section_scores else None,
+            total_score,
+            passed,
+            fail_reason,
+        ),
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+
+# =========================
+# History (User)
+# =========================
 def get_user_history(emp_id):
-    """取得特定員工的歷史紀錄 (包含錯題細節)"""
     conn = get_connection()
-    if not conn: return pd.DataFrame()
-    
-    # 修改：多選取 'id' 和 'wrong_log' 以便前端解析
+    if not conn:
+        return pd.DataFrame()
+
     query = """
-        SELECT id, bank_type, score, duration_seconds, exam_date, wrong_log 
-        FROM records 
-        WHERE emp_id = %s 
+        SELECT
+            id, bank_type, score, total_score,
+            section_scores, passed, fail_reason,
+            duration_seconds, exam_date, wrong_log
+        FROM records
+        WHERE emp_id = %s
         ORDER BY exam_date DESC
     """
     df = pd.read_sql(query, conn, params=(emp_id,))
     conn.close()
     return df
 
+
+# =========================
+# History (Admin)
+# =========================
 def get_all_history():
-    """管理員用：取得所有人的紀錄"""
     conn = get_connection()
-    if not conn: return pd.DataFrame()
+    if not conn:
+        return pd.DataFrame()
 
     query = """
-        SELECT r.id, u.name, u.department, r.bank_type, r.score, r.exam_date 
+        SELECT
+            r.id, u.name, u.department,
+            r.bank_type, r.score, r.total_score,
+            r.passed, r.exam_date
         FROM records r
         JOIN users u ON r.emp_id = u.emp_id
         ORDER BY r.exam_date DESC
