@@ -263,7 +263,7 @@ def process_uploaded_file(exam_type, uploaded_file):
     progress_bar.empty()
     return pd.DataFrame(final_results)
 
-# 👇👇👇 這個就是剛剛報錯說找不到的函式，請確認它有被正確複製進去！ 👇👇👇
+# 👇 【核心修正】：加入上傳狀態檢查與錯誤攔截
 def save_merged_results(exam_type, new_classified_df):
     config = EXAM_CONFIGS.get(exam_type)
     base_gh_path = f"{BASE_BANK_DIR}/{config['folder']}"
@@ -299,8 +299,6 @@ def save_merged_results(exam_type, new_classified_df):
         combined.drop_duplicates(subset=[COL_Q], keep='last', inplace=True)
         after = len(combined)
         
-        logs.append(f"📄 **{filename}**：更新後共 {after} 題。")
-
         mapper = {name: i for i, name in enumerate(target_chs)}
         combined["Sort"] = combined["AI分類章節"].map(mapper).fillna(999)
         combined = combined.sort_values("Sort")
@@ -313,6 +311,16 @@ def save_merged_results(exam_type, new_classified_df):
                     safe = ch.replace("/", "_")[:30]
                     ch_df.drop(columns=["Sort"], errors="ignore").to_excel(writer, sheet_name=safe, index=False)
         
-        gh.gh_put_file(target_gh_path, output.getvalue(), f"Auto-Merge: {filename}")
+        # 👇 這裡改了：嘗試上傳，並根據結果寫 log
+        try:
+            result = gh.gh_put_file(target_gh_path, output.getvalue(), f"Auto-Merge: {filename}")
+            
+            # 如果上傳成功 (result 不是 False)
+            if result is not False:
+                logs.append(f"✅ **{filename}**：成功上傳！更新後共 {after} 題。")
+            else:
+                logs.append(f"❌ **{filename}**：上傳失敗 (GitHub Token 權限不足或無效)。")
+        except Exception as e:
+            logs.append(f"❌ **{filename}**：上傳發生嚴重錯誤！原因：{str(e)}")
 
     return logs
