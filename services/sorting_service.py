@@ -2,23 +2,21 @@ import pandas as pd
 import os
 import re
 import time
-import difflib  # 用於模糊比對
+import json
+import difflib
+import pdfplumber
 from io import BytesIO
 from collections import Counter
 from google import genai
 from google.genai import types
 import streamlit as st
-from utils import github_handler as gh  # 引入 GitHub 工具
+from utils import github_handler as gh
 
 # ==========================================
 # 設定區
 # ==========================================
-
-# 筆記路徑：假設筆記放在 bank/{folder}/ 下
 BASE_BANK_DIR = "bank"
-
-# API Key
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "AIzaSyCiNkDK8pfn305ZSlHmWbVj89_sXBl2eqo")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 EXAM_CONFIGS = {
     "人身保險": {
@@ -97,22 +95,22 @@ class GeminiClient:
         self.model_name = "gemini-2.5-flash"
         
     def generate(self, prompt, temperature=0.1):
-        for attempt in range(3):
+        # 增加重試次數與等待時間，避免 API 429 錯誤
+        for attempt in range(5):
             try:
                 response = self.client.models.generate_content(
                     model=self.model_name, contents=prompt,
-                    config=types.GenerateContentConfig(temperature=temperature)
+                    config=types.GenerateContentConfig(temperature=temperature, response_mime_type="application/json")
                 )
                 return response.text.strip()
-            except Exception:
-                time.sleep((attempt + 1) * 2)
+            except Exception as e:
+                wait = (attempt + 1) * 5
+                print(f"API Busy, retrying in {wait}s... Error: {e}")
+                time.sleep(wait)
         return ""
-
-import pdfplumber
 
 class ChapterManager:
     def __init__(self, folder_name, pdf_filename, all_chapters, ai_client):
-        # 雲端版：嘗試從 GitHub 下載筆記內容
         self.pdf_path = f"{BASE_BANK_DIR}/{folder_name}/{pdf_filename}"
         self.all_chapters = all_chapters
         self.ai = ai_client
@@ -122,121 +120,129 @@ class ChapterManager:
         self._gen_keywords()
 
     def _read_pdf_from_github(self):
-        # 使用 gh_download_bytes 讀取筆記
         data = gh.gh_download_bytes(self.pdf_path)
-        if not data:
-            return
-        
+        if not data: return
         try:
             with pdfplumber.open(BytesIO(data)) as pdf:
-                content = []
-                for page in pdf.pages:
-                    txt = page.extract_text()
-                    if txt: content.append(txt)
+                content = [p.extract_text() for p in pdf.pages if p.extract_text()]
                 self.full_note_text = "\n".join(content)
-        except Exception:
-            pass
+        except: pass
 
     def _get_context(self, chapter):
+        # 簡化版 Context 抓取，只抓最相關的一小段以節省 Token
         if not self.full_note_text: return ""
-        terms = re.split(r'[、\s\-\(\)辦法注意事項]', chapter)
-        terms = [t for t in terms if len(t) >= 2]
-        terms.append(chapter) 
-        snippets = []
-        for t in terms:
-            indices = [m.start() for m in re.finditer(re.escape(t), self.full_note_text)]
-            for idx in indices[:2]:
-                snippets.append(self.full_note_text[max(0, idx-200):min(len(self.full_note_text), idx+500)])
-        return "\n...\n".join(snippets)
+        idx = self.full_note_text.find(chapter)
+        if idx != -1:
+            return self.full_note_text[idx:idx+800]
+        return ""
 
     def _gen_keywords(self):
         if not self.full_note_text:
-            for ch in self.all_chapters:
-                self.chapter_keywords[ch] = [ch]
+            for ch in self.all_chapters: self.chapter_keywords[ch] = [ch]
             return
 
-        progress_text = "正在分析筆記與建立關鍵字..."
+        progress_text = "AI 正在閱讀筆記建立索引 (只需執行一次)..."
         my_bar = st.progress(0, text=progress_text)
         
-        total = len(self.all_chapters)
-        for i, ch in enumerate(self.all_chapters):
-            ctx = self._get_context(ch)
-            prompt = (
-                f"你是保險考題分類專家。請針對章節『{ch}』，列出 5-10 個核心「專有名詞」或「關鍵字」。\n"
-                f"參考筆記：\n{ctx}\n只輸出關鍵字，用逗號分隔。"
-            )
+        # 批次處理關鍵字生成，不要一章一章問
+        prompt = (
+            f"你是保險考題分類專家。請閱讀筆記後，針對下列章節，各列出 5 個最關鍵的專有名詞。\n"
+            f"章節列表：{self.all_chapters}\n"
+            f"筆記內容摘要：{self.full_note_text[:5000]}...\n\n"
+            f"請回傳 JSON 格式：{{ \"章節名\": [\"關鍵字1\", \"關鍵字2\"...] }}"
+        )
+        try:
             res = self.ai.generate(prompt)
-            if res:
-                kws = [k.strip() for k in res.replace("、", ",").replace("\n", ",").split(",") if len(k.strip())>1]
-                self.chapter_keywords[ch] = kws[:15]
-            else:
-                self.chapter_keywords[ch] = [ch]
+            data = json.loads(res)
+            # 確保所有章節都有 key
+            for ch in self.all_chapters:
+                self.chapter_keywords[ch] = data.get(ch, [ch])
+        except:
+            # 失敗回退機制
+            for ch in self.all_chapters: self.chapter_keywords[ch] = [ch]
             
-            my_bar.progress((i + 1) / total, text=f"分析章節：{ch}")
-            time.sleep(0.2)
-        
+        my_bar.progress(1.0, text="索引建立完成！")
+        time.sleep(1)
         my_bar.empty()
 
 class SmartClassifier:
     def __init__(self, mgr, default_ch):
         self.mgr = mgr
         self.default_ch = default_ch
-        # 建立一個乾淨的章節清單字串，讓 AI 好讀
         self.chapters_str = "\n".join([f"- {c}" for c in mgr.all_chapters])
 
-    def classify(self, q, opts):
-        full_text = f"{q} {opts}"
-        
-        # 1. 關鍵字規則比對 (Rule-Based) - 先搶快
-        scores = Counter()
-        for ch, kws in self.mgr.chapter_keywords.items():
-            for kw in kws:
-                if kw in full_text: 
-                    # 若關鍵字跟章節名完全一樣，權重加重
-                    weight = 5 if kw == ch else 1
-                    scores[ch] += weight
-        
-        if scores:
-            best_chapter, score = scores.most_common(1)[0]
-            # 門檻值：至少要有 2 分才算數
-            if score >= 2: 
-                return best_chapter, "關鍵字"
+    def classify_batch(self, batch_data):
+        """
+        批次分類核心邏輯
+        batch_data: list of dict [{'id': 0, 'q': '...', 'opts': '...'}, ...]
+        """
+        results = {}
+        ai_queue = []
 
-        # 2. AI 語意判斷 (AI-Based) - 處理難題
-        prompt = (
-            f"你是一個保險考題分類員。請根據題目與選項，從下方『標準章節清單』中，選出最相關的一個章節。\n"
-            f"題目：{q}\n"
-            f"選項：{opts}\n\n"
-            f"【標準章節清單】：\n{self.chapters_str}\n\n"
-            f"注意：你只能輸出清單中的名稱，不要輸出任何其他文字或解釋。"
-        )
-        
-        ai_response = self.mgr.ai.generate(prompt)
-        ai_response = ai_response.strip().replace("\n", "").replace(" ", "") # 清理 AI 回答
+        # 1. 先用關鍵字快速篩選 (本地運算，極快)
+        for item in batch_data:
+            full_text = f"{item['q']} {item['opts']}"
+            scores = Counter()
+            for ch, kws in self.mgr.chapter_keywords.items():
+                for kw in kws:
+                    if kw in full_text: 
+                        weight = 5 if kw == ch else 1
+                        scores[ch] += weight
+            
+            best, val = scores.most_common(1)[0] if scores else (None, 0)
+            
+            if val >= 2:
+                results[item['id']] = (best, "關鍵字")
+            else:
+                ai_queue.append(item)
 
-        # 3. 模糊比對 (Fuzzy Match) - 解決 "AI 多嘴" 的問題
-        # 方法 A: 直接包含檢查
-        for ch in self.mgr.all_chapters:
-            if ch in ai_response: 
-                return ch, "AI判斷"
-        
-        # 方法 B: 相似度比對 (Similarity) - 針對 AI 寫錯字或多字的狀況
-        # 找出與 AI 回答最像的章節
-        matches = difflib.get_close_matches(ai_response, self.mgr.all_chapters, n=1, cutoff=0.4)
-        if matches:
-            return matches[0], "AI(模糊)"
+        # 2. 剩下的打包問 AI (減少 API 呼叫次數)
+        if ai_queue:
+            # 限制一次問 10 題，避免 Token 爆掉
+            prompt_items = []
+            for item in ai_queue:
+                prompt_items.append(f"ID {item['id']}:\n題目: {item['q']}\n選項: {item['opts']}")
+            
+            prompt_str = "\n\n".join(prompt_items)
+            prompt = (
+                f"請將下列題目分類到最合適的章節。可選章節：\n{self.mgr.all_chapters}\n\n"
+                f"{prompt_str}\n\n"
+                f"請直接回傳 JSON 格式，不要有Markdown標記：\n"
+                f"[{{ \"id\": 題號, \"chapter\": \"章節名稱\" }}, ...]"
+            )
+            
+            try:
+                # 呼叫 AI
+                res_text = self.mgr.ai.generate(prompt)
+                # 清理可能的回傳雜訊
+                res_text = res_text.replace("```json", "").replace("```", "")
+                ai_results = json.loads(res_text)
+                
+                # 解析回傳
+                for res in ai_results:
+                    res_id = res.get('id')
+                    raw_ch = res.get('chapter', self.default_ch)
+                    
+                    # 模糊比對章節名稱 (防止 AI 寫錯字)
+                    matches = difflib.get_close_matches(raw_ch, self.mgr.all_chapters, n=1, cutoff=0.4)
+                    final_ch = matches[0] if matches else self.default_ch
+                    
+                    results[res_id] = (final_ch, "AI判斷")
+                    
+            except Exception as e:
+                print(f"Batch AI Failed: {e}")
+                # 失敗時全部歸為預設
+                for item in ai_queue:
+                    results[item['id']] = (self.default_ch, "預設(API失敗)")
 
-        # 4. 真的沒救了，回傳預設值
-        return self.default_ch, "預設"
+        return results
 
 # ==========================================
 # 對外介面函數
 # ==========================================
 
-# 👇【快取核心】這個函式負責建立並「記住」Manager，避免每次重跑
 @st.cache_resource(show_spinner=False)
 def get_cached_manager(folder_name, note_filename, all_chapters_tuple):
-    # 這裡必須把 list 轉成 tuple 才能被 cache，裡面再轉回 list
     client = GeminiClient(GEMINI_API_KEY)
     return ChapterManager(folder_name, note_filename, list(all_chapters_tuple), client)
 
@@ -248,10 +254,7 @@ def process_uploaded_file(exam_type, uploaded_file):
     for output_conf in config['outputs']:
         all_chapters.extend(output_conf['chapters'])
 
-    # 👇【修改】使用快取機制取得 Manager
-    # 注意：我們把 all_chapters (list) 轉成 tuple 傳進去，因為 list 不能被 Streamlit cache hash
     mgr = get_cached_manager(config['folder'], config['note_file'], tuple(all_chapters))
-    
     classifier = SmartClassifier(mgr, config['default_chapter'])
 
     try:
@@ -260,74 +263,87 @@ def process_uploaded_file(exam_type, uploaded_file):
         st.error(f"Excel 讀取失敗: {e}")
         return None
 
-    results = []
-    curr_sheet = 0
-    progress_bar = st.progress(0, text="開始分類題目...")
+    final_results = []
+    progress_bar = st.progress(0, text="準備開始分類...")
+    
+    # 預先計算總題數以顯示進度
+    total_rows = sum(len(df) for df in dfs.values() if not df.empty and COL_Q in df.columns)
+    processed_count = 0
+    
+    BATCH_SIZE = 10  # 每 10 題問一次 AI
 
     for name, df in dfs.items():
-        curr_sheet += 1
-        if df.empty or COL_Q not in df.columns: 
-            continue
+        if df.empty or COL_Q not in df.columns: continue
         
         valid_opts = [c for c in config['col_opts'] if c in df.columns]
-        total_rows = len(df)
+        
+        # 準備批次資料容器
+        batch_buffer = [] 
+        rows_map = {} # 用 id 對應 row 資料
         
         for idx, row in df.iterrows():
             q = str(row.get(COL_Q, "")).strip()
             if not q or q.lower() == "nan": continue
             
             opts_txt = " ".join([str(row.get(c, "")) for c in valid_opts])
-            ch, src = classifier.classify(q, opts_txt)
             
-            r = row.to_dict()
-            r["AI分類章節"] = ch
-            r["分類來源"] = src
-            results.append(r)
+            # 給每個題目一個唯一 ID (Sheet名_Index)
+            unique_id = f"{name}_{idx}"
+            item = {'id': unique_id, 'q': q, 'opts': opts_txt}
             
-            # 每 5 題更新一次進度，避免 UI 卡頓
-            if idx % 5 == 0:
-                progress = (idx + 1) / total_rows
-                progress_bar.progress(progress, text=f"正在處理分頁 '{name}'：第 {idx+1}/{total_rows} 題")
+            batch_buffer.append(item)
+            rows_map[unique_id] = row.to_dict()
+            
+            # 當 Buffer 滿了，或是最後一題，就執行批次分類
+            if len(batch_buffer) >= BATCH_SIZE or idx == len(df) - 1:
+                # 執行分類！
+                batch_results = classifier.classify_batch(batch_buffer)
+                
+                # 將結果寫回 row
+                for item in batch_buffer:
+                    res = batch_results.get(item['id'], (config['default_chapter'], "預設"))
+                    r = rows_map[item['id']]
+                    r["AI分類章節"] = res[0]
+                    r["分類來源"] = res[1]
+                    final_results.append(r)
+                
+                # 更新進度條
+                processed_count += len(batch_buffer)
+                progress = min(processed_count / total_rows, 1.0)
+                progress_bar.progress(progress, text=f"🔥 高速分類中：{processed_count}/{total_rows} 題")
+                
+                # 清空 Buffer
+                batch_buffer = []
+                
+                # 微小休息，避免太過頻繁
+                time.sleep(2) # 批次模式下，這裡休息 2 秒非常安全
 
     progress_bar.empty()
-    return pd.DataFrame(results)
+    return pd.DataFrame(final_results)
 
 def save_merged_results(exam_type, new_classified_df):
-    """
-    將分類好的 DF 合併回 GitHub 上的題庫
-    """
     config = EXAM_CONFIGS.get(exam_type)
-    # GitHub 上的資料夾路徑 (例如 bank/人身)
     base_gh_path = f"{BASE_BANK_DIR}/{config['folder']}"
-    
     logs = []
 
     for out_conf in config['outputs']:
         filename = out_conf['filename']
         target_chs = out_conf['chapters']
-        # GitHub 完整檔案路徑
         target_gh_path = f"{base_gh_path}/{filename}"
 
-        # 篩選新題目
         sub_new = new_classified_df[new_classified_df["AI分類章節"].isin(target_chs)].copy()
-        if sub_new.empty:
-            continue
+        if sub_new.empty: continue
 
-        # 1. 嘗試從 GitHub 下載舊檔
         existing_df = pd.DataFrame()
         old_file_bytes = gh.gh_download_bytes(target_gh_path)
-        
         if old_file_bytes:
             try:
                 xls = pd.read_excel(BytesIO(old_file_bytes), sheet_name=None)
                 for sname, sdf in xls.items():
-                    if "AI分類章節" not in sdf.columns:
-                        sdf["AI分類章節"] = sname
+                    if "AI分類章節" not in sdf.columns: sdf["AI分類章節"] = sname
                     existing_df = pd.concat([existing_df, sdf], ignore_index=True)
-            except Exception:
-                pass
+            except: pass
 
-        # 2. 合併與去重
         if not existing_df.empty:
             common = list(set(existing_df.columns) & set(sub_new.columns))
             if COL_Q in common:
@@ -340,11 +356,9 @@ def save_merged_results(exam_type, new_classified_df):
         before = len(combined)
         combined.drop_duplicates(subset=[COL_Q], keep='last', inplace=True)
         after = len(combined)
-        removed = before - after
         
-        logs.append(f"📄 **{filename}**：新增 {len(sub_new)} 題，合併後共 {after} 題 (已自動移除 {removed} 題重複)。")
+        logs.append(f"📄 **{filename}**：新增 {len(sub_new)} 題，合併後共 {after} 題 (已去重)。")
 
-        # 3. 轉存為 Excel Bytes
         mapper = {name: i for i, name in enumerate(target_chs)}
         combined["Sort"] = combined["AI分類章節"].map(mapper).fillna(999)
         combined = combined.sort_values("Sort")
@@ -357,12 +371,6 @@ def save_merged_results(exam_type, new_classified_df):
                     safe = ch.replace("/", "_")[:30]
                     ch_df.drop(columns=["Sort"], errors="ignore").to_excel(writer, sheet_name=safe, index=False)
         
-        # 4. 上傳回 GitHub (覆蓋舊檔)
-        file_bytes = output.getvalue()
-        gh.gh_put_file(
-            target_gh_path, 
-            file_bytes, 
-            f"Auto-Merge: Updated {filename} via Admin Panel"
-        )
+        gh.gh_put_file(target_gh_path, output.getvalue(), f"Auto-Merge: {filename}")
 
     return logs
