@@ -206,7 +206,26 @@ class SmartClassifier:
 # ==========================================
 # 對外介面函數
 # ==========================================
+@st.cache_resource(show_spinner=False)
+def get_cached_manager(folder_name, note_filename, all_chapters_tuple):
+    # 這裡必須把 list 轉成 tuple 才能被 cache，裡面再轉回 list
+    client = GeminiClient(GEMINI_API_KEY)
+    return ChapterManager(folder_name, note_filename, list(all_chapters_tuple), client)
 
+def process_uploaded_file(exam_type, uploaded_file):
+    config = EXAM_CONFIGS.get(exam_type)
+    if not config: return None
+
+    all_chapters = []
+    for output_conf in config['outputs']:
+        all_chapters.extend(output_conf['chapters'])
+
+    # 👇【修改】原本是直接 new ChapterManager，現在改呼叫上面的快取函式
+    # 注意：我們把 all_chapters (list) 轉成 tuple 傳進去，因為 list 不能被雜湊(hash)
+    mgr = get_cached_manager(config['folder'], config['note_file'], tuple(all_chapters))
+    
+    classifier = SmartClassifier(mgr, config['default_chapter'])
+    
 def process_uploaded_file(exam_type, uploaded_file):
     config = EXAM_CONFIGS.get(exam_type)
     if not config: return None
