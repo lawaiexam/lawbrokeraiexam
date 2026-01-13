@@ -1,31 +1,11 @@
-# --- Core ---
 streamlit>=1.32
 pandas>=2.0
-
-# --- Excel / File handling ---
 openpyxl>=3.1
-xlrd>=2.0
-# 👇 [新增] 用於寫入 Excel 格式
 XlsxWriter>=3.0
-# 👇 [新增] 用於讀取 PDF 筆記
-pdfplumber>=0.10
-
-# --- HTTP / API ---
 requests>=2.31
-# 👇 [新增] 用於自動更新 GitHub 檔案
 PyGithub>=2.0
-
-# --- Database ---
 mysql-connector-python>=8.3
-
-# --- AI (Gemini) ---
-# 保留舊版 (若其他頁面有用到)
 google-generativeai>=0.4
-# 👇 [新增] 新版 SDK (用於題庫分類功能)
 google-genai>=0.3
-
-# --- Image handling ---
 Pillow>=10.0
-
-# --- Utilities ---
 python-dateutil>=2.8
