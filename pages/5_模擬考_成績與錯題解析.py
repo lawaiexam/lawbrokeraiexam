@@ -14,13 +14,19 @@ if user is None:
 
 st.title("模擬考成績與錯題解析")
 
-# ✅ 防呆：如果使用者直接開這頁但沒有考試結果
-if "results_df" not in st.session_state or "score_tuple" not in st.session_state:
-    st.info("尚無可顯示的考試結果，請先完成一次模擬考。")
-    st.switch_page("pages/2_開始考試_模擬考.py")
+# 🛠️ 修正點：改用 .get() 取值並判斷是否為 None
+# ensure_state 會初始化 Key 但值為 None，所以必須檢查值
+results_df = st.session_state.get("results_df")
+score_tuple = st.session_state.get("score_tuple")
 
-results_df = st.session_state.results_df
-score_tuple = st.session_state.score_tuple
+if results_df is None or score_tuple is None:
+    st.info("尚無可顯示的考試結果，請先完成一次模擬考。")
+    # 這裡建議加上延遲或按鈕，不然使用者可能還沒看清楚提示就被轉走了，但維持原樣也可以
+    if st.button("前往模擬考"):
+        st.switch_page("pages/2_開始考試_模擬考.py")
+    st.stop()  # 加上 stop 確保下方程式碼不會被執行
+
+# 因為上面已經取過值了，這裡可以直接用變數，不用再從 session_state 拿
 wrong_df = st.session_state.get("wrong_df")
 summary = st.session_state.get("mock_summary")  # ✅ 兩節連考資訊（若有）
 

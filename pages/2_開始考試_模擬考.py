@@ -69,10 +69,11 @@ except Exception:
     st.error(f"找不到題庫映射：{settings['cert_type']} → {section_name}。請檢查 CERT_CATALOG 的 subjects key 是否一致。")
     st.stop()
 
+# 🛠️ 修正點：將 bank_source 改為 bank_source_path
 df = load_bank_df(
-    settings.get("cert_type", ""),  # 佔位參數（你的 load_bank_df 若用不到可忽略）
+    settings.get("cert_type", ""),  
     merge_all=False,
-    bank_source=bank_path
+    bank_source_path=bank_path  # ✅ 改成正確的參數名稱
 )
 
 if df is None or df.empty:
@@ -163,7 +164,12 @@ if not paper:
 if st.session_state.get("time_limit") and st.session_state.get("start_ts"):
     elapsed = int(time.time() - st.session_state.start_ts)
     remain = max(0, st.session_state.time_limit - elapsed)
-    st.metric("本節剩餘時間（秒）", remain)
+    
+    # 🟢 修改開始：計算分與秒，並格式化顯示
+    mins, secs = divmod(remain, 60)
+    time_str = f"{mins} 分 {secs:02d} 秒"
+    st.metric("本節剩餘時間", time_str)
+    # 🟢 修改結束
 
     if remain == 0 and not st.session_state.get("show_results"):
         st.warning("本節時間到，自動交卷。")
