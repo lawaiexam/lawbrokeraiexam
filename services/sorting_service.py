@@ -1,10 +1,8 @@
 import pandas as pd
 import os
-import re
 import time
 import json
 import difflib
-import pdfplumber
 from io import BytesIO
 from collections import Counter
 from google import genai
@@ -13,16 +11,17 @@ import streamlit as st
 from utils import github_handler as gh
 
 # ==========================================
-# 設定區 (EXAM_CONFIGS) - 已根據您提供的 pa, ipa, fci 舊檔案進行校正
+# 設定區
 # ==========================================
 BASE_BANK_DIR = "bank"
+KEYWORDS_FILE = "keywords_db.json"  # 👈 核心：指定讀取靜態關鍵字檔
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 EXAM_CONFIGS = {
-    # 來自 pa_sorting.py 的邏輯
     "人身保險": {
         "folder": "人身",
-        "note_file": "筆記_人身.pdf",
+        # 這裡的 note_file 雖然留著，但程式實際上已經改讀 JSON 了
+        "note_file": "筆記_人身.pdf", 
         "col_opts": ["選項一", "選項二", "選項三", "選項四"], 
         "outputs": [
             {
@@ -44,8 +43,6 @@ EXAM_CONFIGS = {
         ],
         "default_chapter": "投保實務與行銷"
     },
-    
-    # 來自 ipa_sorting.py 的邏輯
     "投資型保險": {
         "folder": "投資型",
         "note_file": "筆記_投資型.pdf",
@@ -67,8 +64,6 @@ EXAM_CONFIGS = {
         ],
         "default_chapter": "投資型保險概論"
     },
-    
-    # 來自 fci_sorting.py 的邏輯
     "外幣保單": {
         "folder": "外幣",
         "note_file": "筆記_外幣.pdf",
@@ -91,7 +86,7 @@ EXAM_CONFIGS = {
 COL_Q = "題目"
 
 # ==========================================
-# 工具類別 (Client & Logic) - 維持高速批次處理引擎
+# 工具類別 (Client & Logic)
 # ==========================================
 
 class GeminiClient:
@@ -100,6 +95,7 @@ class GeminiClient:
         self.model_name = "gemini-2.5-flash"
         
     def generate(self, prompt, temperature=0.1):
+        # 自動重試機制，對抗 503/429 錯誤
         for attempt in range(5):
             try:
                 response = self.client.models.generate_content(
@@ -109,54 +105,41 @@ class GeminiClient:
                 return response.text.strip()
             except Exception as e:
                 wait = (attempt + 1) * 5
-                print(f"API Busy, retrying in {wait}s... Error: {e}")
+                print(f"API Busy (Error: {e}), retrying in {wait}s...")
                 time.sleep(wait)
         return ""
 
 class ChapterManager:
-    def __init__(self, folder_name, pdf_filename, all_chapters, ai_client):
-        self.pdf_path = f"{BASE_BANK_DIR}/{folder_name}/{pdf_filename}"
+    def __init__(self, exam_type, all_chapters, ai_client):
+        self.exam_type = exam_type
         self.all_chapters = all_chapters
         self.ai = ai_client
-        self.full_note_text = ""
         self.chapter_keywords = {} 
-        self._read_pdf_from_github()
-        self._gen_keywords()
+        self._load_static_keywords()
 
-    def _read_pdf_from_github(self):
-        data = gh.gh_download_bytes(self.pdf_path)
-        if not data: return
-        try:
-            with pdfplumber.open(BytesIO(data)) as pdf:
-                content = [p.extract_text() for p in pdf.pages if p.extract_text()]
-                self.full_note_text = "\n".join(content)
-        except: pass
-
-    def _gen_keywords(self):
-        if not self.full_note_text:
-            for ch in self.all_chapters: self.chapter_keywords[ch] = [ch]
-            return
-
-        progress_text = "AI 正在閱讀筆記建立索引 (只需執行一次)..."
-        my_bar = st.progress(0, text=progress_text)
+    def _load_static_keywords(self):
+        """
+        讀取本地生成的 keywords_db.json
+        """
+        if os.path.exists(KEYWORDS_FILE):
+            try:
+                with open(KEYWORDS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    # 取得該考科的關鍵字
+                    if self.exam_type in data:
+                        self.chapter_keywords = data[self.exam_type]
+                        # 補齊可能缺失的章節
+                        for ch in self.all_chapters:
+                            if ch not in self.chapter_keywords:
+                                self.chapter_keywords[ch] = [ch]
+                        print(f"✅ 成功載入 {self.exam_type} 關鍵字庫")
+                        return
+            except Exception as e:
+                print(f"❌ 讀取關鍵字檔失敗: {e}")
         
-        prompt = (
-            f"你是保險考題分類專家。請閱讀筆記後，針對下列章節，各列出 5 個最關鍵的專有名詞。\n"
-            f"章節列表：{self.all_chapters}\n"
-            f"筆記內容摘要：{self.full_note_text[:8000]}...\n\n" # 增加讀取量
-            f"請回傳 JSON 格式：{{ \"章節名\": [\"關鍵字1\", \"關鍵字2\"...] }}"
-        )
-        try:
-            res = self.ai.generate(prompt)
-            data = json.loads(res)
-            for ch in self.all_chapters:
-                self.chapter_keywords[ch] = data.get(ch, [ch])
-        except:
-            for ch in self.all_chapters: self.chapter_keywords[ch] = [ch]
-            
-        my_bar.progress(1.0, text="索引建立完成！")
-        time.sleep(1)
-        my_bar.empty()
+        print(f"⚠️ 警告：無法讀取 JSON，使用預設章節名作為關鍵字。")
+        for ch in self.all_chapters:
+            self.chapter_keywords[ch] = [ch]
 
 class SmartClassifier:
     def __init__(self, mgr, default_ch):
@@ -164,13 +147,10 @@ class SmartClassifier:
         self.default_ch = default_ch
 
     def classify_batch(self, batch_data):
-        """
-        批次分類核心邏輯
-        """
         results = {}
         ai_queue = []
 
-        # 1. 關鍵字快速篩選
+        # 1. 關鍵字快速篩選 (本地運算，極快)
         for item in batch_data:
             full_text = f"{item['q']} {item['opts']}"
             scores = Counter()
@@ -182,12 +162,13 @@ class SmartClassifier:
             
             best, val = scores.most_common(1)[0] if scores else (None, 0)
             
+            # 門檻值：命中 2 個關鍵字以上才算數
             if val >= 2:
                 results[item['id']] = (best, "關鍵字")
             else:
                 ai_queue.append(item)
 
-        # 2. AI 批次判斷
+        # 2. AI 批次判斷 (剩下的難題交給 AI)
         if ai_queue:
             prompt_items = []
             for item in ai_queue:
@@ -224,9 +205,9 @@ class SmartClassifier:
 # ==========================================
 
 @st.cache_resource(show_spinner=False)
-def get_cached_manager(folder_name, note_filename, all_chapters_tuple):
+def get_cached_manager(exam_type, all_chapters_tuple):
     client = GeminiClient(GEMINI_API_KEY)
-    return ChapterManager(folder_name, note_filename, list(all_chapters_tuple), client)
+    return ChapterManager(exam_type, list(all_chapters_tuple), client)
 
 def process_uploaded_file(exam_type, uploaded_file):
     config = EXAM_CONFIGS.get(exam_type)
@@ -236,114 +217,4 @@ def process_uploaded_file(exam_type, uploaded_file):
     for output_conf in config['outputs']:
         all_chapters.extend(output_conf['chapters'])
 
-    mgr = get_cached_manager(config['folder'], config['note_file'], tuple(all_chapters))
-    classifier = SmartClassifier(mgr, config['default_chapter'])
-
-    try:
-        # 讀取 Excel，這裡會根據設定自動去找選項欄位
-        dfs = pd.read_excel(uploaded_file, sheet_name=None)
-    except Exception as e:
-        st.error(f"Excel 讀取失敗: {e}")
-        return None
-
-    final_results = []
-    progress_bar = st.progress(0, text="準備開始分類...")
-    
-    total_rows = sum(len(df) for df in dfs.values() if not df.empty and COL_Q in df.columns)
-    processed_count = 0
-    BATCH_SIZE = 10 
-
-    for name, df in dfs.items():
-        if df.empty or COL_Q not in df.columns: continue
-        
-        # ⚠️ 這裡會動態根據考科抓取正確的選項欄位 (1,2,3 或 一,二,三)
-        valid_opts = [c for c in config['col_opts'] if c in df.columns]
-        
-        batch_buffer = [] 
-        rows_map = {}
-        
-        for idx, row in df.iterrows():
-            q = str(row.get(COL_Q, "")).strip()
-            if not q or q.lower() == "nan": continue
-            
-            opts_txt = " ".join([str(row.get(c, "")) for c in valid_opts])
-            
-            unique_id = f"{name}_{idx}"
-            item = {'id': unique_id, 'q': q, 'opts': opts_txt}
-            
-            batch_buffer.append(item)
-            rows_map[unique_id] = row.to_dict()
-            
-            if len(batch_buffer) >= BATCH_SIZE or idx == len(df) - 1:
-                batch_results = classifier.classify_batch(batch_buffer)
-                for item in batch_buffer:
-                    res = batch_results.get(item['id'], (config['default_chapter'], "預設"))
-                    r = rows_map[item['id']]
-                    r["AI分類章節"] = res[0]
-                    r["分類來源"] = res[1]
-                    final_results.append(r)
-                
-                processed_count += len(batch_buffer)
-                progress = min(processed_count / total_rows, 1.0)
-                progress_bar.progress(progress, text=f"🔥 高速分類中：{processed_count}/{total_rows} 題")
-                
-                batch_buffer = []
-                time.sleep(2)
-
-    progress_bar.empty()
-    return pd.DataFrame(final_results)
-
-def save_merged_results(exam_type, new_classified_df):
-    # 此函式維持不變，負責將結果推回 GitHub
-    config = EXAM_CONFIGS.get(exam_type)
-    base_gh_path = f"{BASE_BANK_DIR}/{config['folder']}"
-    logs = []
-
-    for out_conf in config['outputs']:
-        filename = out_conf['filename']
-        target_chs = out_conf['chapters']
-        target_gh_path = f"{base_gh_path}/{filename}"
-
-        sub_new = new_classified_df[new_classified_df["AI分類章節"].isin(target_chs)].copy()
-        if sub_new.empty: continue
-
-        existing_df = pd.DataFrame()
-        old_file_bytes = gh.gh_download_bytes(target_gh_path)
-        if old_file_bytes:
-            try:
-                xls = pd.read_excel(BytesIO(old_file_bytes), sheet_name=None)
-                for sname, sdf in xls.items():
-                    if "AI分類章節" not in sdf.columns: sdf["AI分類章節"] = sname
-                    existing_df = pd.concat([existing_df, sdf], ignore_index=True)
-            except: pass
-
-        if not existing_df.empty:
-            common = list(set(existing_df.columns) & set(sub_new.columns))
-            if COL_Q in common:
-                combined = pd.concat([existing_df, sub_new], ignore_index=True)
-            else:
-                combined = sub_new
-        else:
-            combined = sub_new
-        
-        before = len(combined)
-        combined.drop_duplicates(subset=[COL_Q], keep='last', inplace=True)
-        after = len(combined)
-        
-        logs.append(f"📄 **{filename}**：新增 {len(sub_new)} 題，合併後共 {after} 題 (已去重)。")
-
-        mapper = {name: i for i, name in enumerate(target_chs)}
-        combined["Sort"] = combined["AI分類章節"].map(mapper).fillna(999)
-        combined = combined.sort_values("Sort")
-
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            for ch in target_chs:
-                ch_df = combined[combined["AI分類章節"] == ch]
-                if not ch_df.empty:
-                    safe = ch.replace("/", "_")[:30]
-                    ch_df.drop(columns=["Sort"], errors="ignore").to_excel(writer, sheet_name=safe, index=False)
-        
-        gh.gh_put_file(target_gh_path, output.getvalue(), f"Auto-Merge: {filename}")
-
-    return logs
+    mgr = get_cached_manager
