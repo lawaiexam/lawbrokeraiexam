@@ -1,0 +1,168 @@
+{
+  "version": "1.0",
+  "locale": "zh-TW",
+  "unit": "percent",
+  "weight_policy": {
+    "subject_level": "fixed",
+    "chapter_level": "fixed"
+  },
+  "licenses": [
+    {
+      "license_id": "life_insurance_agent",
+      "license_name": "人身保險業務員資格測驗",
+      "subjects": [
+        {
+          "subject_id": "life_regulation",
+          "subject_name": "保險法規",
+          "subject_weight_percent": 50,
+          "chapters": [
+            {
+              "chapter_id": "insurance_law_core",
+              "chapter_name": "保險法（總則／契約／基本規範）",
+              "weight_percent": 40,
+              "tags": ["保險法", "契約", "權利義務", "告知", "解除", "效力"]
+            },
+            {
+              "chapter_id": "solicitation_rules",
+              "chapter_name": "招攬行為與業務員管理規範",
+              "weight_percent": 40,
+              "tags": ["招攬規範", "業務員管理", "資訊揭露", "不得行為"]
+            },
+            {
+              "chapter_id": "liability_penalties",
+              "chapter_name": "責任歸屬與罰則（行政責任／民刑責概念）",
+              "weight_percent": 20,
+              "tags": ["罰則", "責任", "處分", "違規"]
+            }
+          ]
+        },
+        {
+          "subject_id": "life_practice",
+          "subject_name": "保險實務",
+          "subject_weight_percent": 50,
+          "chapters": [
+            {
+              "chapter_id": "insurance_principles",
+              "chapter_name": "保險學原理與風險概念",
+              "weight_percent": 30,
+              "tags": ["風險", "保險原理", "要保人", "被保險人", "保險利益"]
+            },
+            {
+              "chapter_id": "life_products",
+              "chapter_name": "人身保險商品（壽險／傷害／健康／年金）",
+              "weight_percent": 50,
+              "tags": ["壽險", "傷害險", "健康險", "年金", "給付", "理賠"]
+            },
+            {
+              "chapter_id": "sales_practice_ethics",
+              "chapter_name": "招攬實務與倫理（保戶權益／申訴爭議）",
+              "weight_percent": 20,
+              "tags": ["招攬流程", "保戶權益", "申訴", "爭議處理", "倫理"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "license_id": "fx_non_investment_insurance",
+      "license_name": "外幣收付非投資型保險商品測驗",
+      "subjects": [
+        {
+          "subject_id": "fx_exam",
+          "subject_name": "外幣非投資型（綜合）",
+          "subject_weight_percent": 100,
+          "chapters": [
+            {
+              "chapter_id": "fx_basics",
+              "chapter_name": "外匯與匯率基礎（制度／升貶值／即期遠期）",
+              "weight_percent": 28,
+              "tags": ["匯率", "即期", "遠期", "升貶值", "外匯制度"]
+            },
+            {
+              "chapter_id": "fx_products",
+              "chapter_name": "外幣非投資型商品與交易流程（保費／給付／計價）",
+              "weight_percent": 28,
+              "tags": ["外幣壽險", "外幣年金", "保費", "給付", "流程"]
+            },
+            {
+              "chapter_id": "fx_regulation_compliance",
+              "chapter_name": "法令規範與遵循（外匯規範／洗錢防制／銷售限制）",
+              "weight_percent": 22,
+              "tags": ["外匯規範", "AML", "遵循", "限制", "不得行為"]
+            },
+            {
+              "chapter_id": "fx_risk_disclosure_practice",
+              "chapter_name": "風險揭露與銷售實務（匯率風險／告知義務／案例）",
+              "weight_percent": 22,
+              "tags": ["匯率風險", "揭露", "告知", "案例", "申訴"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "license_id": "investment_linked_insurance",
+      "license_name": "投資型保險商品業務員測驗",
+      "subjects": [
+        {
+          "subject_id": "il_investment_practice",
+          "subject_name": "投資實務",
+          "subject_weight_percent": 50,
+          "chapters": [
+            {
+              "chapter_id": "investment_basics",
+              "chapter_name": "投資工具與風險報酬（股債基金／波動／分散）",
+              "weight_percent": 45,
+              "tags": ["股票", "債券", "基金", "風險報酬", "分散", "波動"]
+            },
+            {
+              "chapter_id": "il_product_mechanics",
+              "chapter_name": "投資型商品機制（變額壽險／變額年金／帳戶與費用）",
+              "weight_percent": 45,
+              "tags": ["變額壽險", "變額年金", "帳戶", "費用", "淨值"]
+            },
+            {
+              "chapter_id": "customer_suitability_practice",
+              "chapter_name": "客戶適合度與銷售流程實務（KYC/KYP/風險屬性）",
+              "weight_percent": 10,
+              "tags": ["KYC", "KYP", "適合度", "風險屬性", "流程"]
+            }
+          ]
+        },
+        {
+          "subject_id": "il_regulations",
+          "subject_name": "法令規章",
+          "subject_weight_percent": 50,
+          "chapters": [
+            {
+              "chapter_id": "sales_regulations",
+              "chapter_name": "銷售規範與資訊揭露（不得行為／風險揭露／文件留存）",
+              "weight_percent": 50,
+              "tags": ["揭露", "不得行為", "留存", "銷售規範"]
+            },
+            {
+              "chapter_id": "suitability_rules",
+              "chapter_name": "適合度規範（KYC/KYP/分級管理／高齡與弱勢保護）",
+              "weight_percent": 30,
+              "tags": ["適合度", "分級", "高齡", "弱勢", "保護措施"]
+            },
+            {
+              "chapter_id": "dispute_liability",
+              "chapter_name": "責任與爭議處理（申訴／錯誤銷售／法遵責任）",
+              "weight_percent": 20,
+              "tags": ["申訴", "爭議", "錯誤銷售", "責任"]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "generation_defaults": {
+    "selection_strategy": {
+      "step_1": "allocate_questions_by_subject_weight",
+      "step_2": "allocate_questions_by_chapter_weight_within_subject",
+      "rounding": "largest_remainder"
+    },
+    "min_questions_per_chapter": 0
+  }
+}

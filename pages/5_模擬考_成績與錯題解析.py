@@ -230,6 +230,43 @@ def _reset_exam_state():
         if k in st.session_state:
             del st.session_state[k]
 
+# ==========================================
+# 🟢 新增功能：AI 整體診斷與分析
+# ==========================================
+from services.ai_analysis_service import generate_overall_analysis # 匯入剛剛寫好的服務
+
+st.divider()
+st.subheader("🤖 AI 考後整體診斷報告")
+
+# 只有當有錯題時才顯示
+if st.session_state.wrong_df is not None and not st.session_state.wrong_df.empty:
+    st.info("💡 點擊下方按鈕，讓 AI 幫您統整這份考卷的弱點，並提供複習策略！")
+    
+    # 使用 button 觸發，節省 API 用量
+    if st.button("🚀 生成錯題整體分析與建議", type="primary", use_container_width=True):
+        with st.spinner("正在分析您的錯題模式與觀念盲點...（約需 5-10 秒）"):
+            # 呼叫後端分析服務
+            analysis_result = generate_overall_analysis(
+                st.session_state.wrong_df, 
+                exam_type=st.session_state.get("current_bank_name", "模擬考")
+            )
+            
+            # 顯示結果
+            st.markdown("### 📊 分析結果")
+            st.markdown(analysis_result)
+            
+            # (選用) 也可以把分析結果存入 session，避免按其他按鈕後消失
+            st.session_state['last_analysis'] = analysis_result
+
+    # 如果 session 中有存上次的分析，就顯示出來 (避免重整後消失)
+    elif 'last_analysis' in st.session_state:
+        st.markdown("### 📊 分析結果 (歷史紀錄)")
+        st.markdown(st.session_state['last_analysis'])
+
+else:
+    st.success("🎉 恭喜！本次考試滿分，無需進行錯題分析。請繼續保持！")
+
+    
 # ✅ 回首頁
 if st.button("結束考試，回到首頁", type="primary"):
     _reset_exam_state()
