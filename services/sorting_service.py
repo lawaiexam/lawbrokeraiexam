@@ -2,7 +2,7 @@ import pandas as pd
 import os
 import re
 import time
-import pdfplumber
+import difflib  # 用於模糊比對
 from io import BytesIO
 from collections import Counter
 from google import genai
@@ -108,6 +108,8 @@ class GeminiClient:
                 time.sleep((attempt + 1) * 2)
         return ""
 
+import pdfplumber
+
 class ChapterManager:
     def __init__(self, folder_name, pdf_filename, all_chapters, ai_client):
         # 雲端版：嘗試從 GitHub 下載筆記內容
@@ -179,33 +181,59 @@ class SmartClassifier:
     def __init__(self, mgr, default_ch):
         self.mgr = mgr
         self.default_ch = default_ch
+        # 建立一個乾淨的章節清單字串，讓 AI 好讀
         self.chapters_str = "\n".join([f"- {c}" for c in mgr.all_chapters])
 
     def classify(self, q, opts):
-        full = f"{q} {opts}"
-        # Rule-Based
+        full_text = f"{q} {opts}"
+        
+        # 1. 關鍵字規則比對 (Rule-Based) - 先搶快
         scores = Counter()
         for ch, kws in self.mgr.chapter_keywords.items():
             for kw in kws:
-                if kw in full: scores[ch] += (5 if kw == ch else 1)
+                if kw in full_text: 
+                    # 若關鍵字跟章節名完全一樣，權重加重
+                    weight = 5 if kw == ch else 1
+                    scores[ch] += weight
+        
         if scores:
-            best, val = scores.most_common(1)[0]
-            if val >= 2: return best, "關鍵字"
+            best_chapter, score = scores.most_common(1)[0]
+            # 門檻值：至少要有 2 分才算數
+            if score >= 2: 
+                return best_chapter, "關鍵字"
 
-        # AI-Based
+        # 2. AI 語意判斷 (AI-Based) - 處理難題
         prompt = (
-            f"題目：{q}\n選項：{opts}\n"
-            f"請從下列章節選出最合適的一個：\n{self.chapters_str}\n"
-            f"只輸出章節名稱。若不確定請輸出「{self.default_ch}」。"
+            f"你是一個保險考題分類員。請根據題目與選項，從下方『標準章節清單』中，選出最相關的一個章節。\n"
+            f"題目：{q}\n"
+            f"選項：{opts}\n\n"
+            f"【標準章節清單】：\n{self.chapters_str}\n\n"
+            f"注意：你只能輸出清單中的名稱，不要輸出任何其他文字或解釋。"
         )
-        ans = self.mgr.ai.generate(prompt)
+        
+        ai_response = self.mgr.ai.generate(prompt)
+        ai_response = ai_response.strip().replace("\n", "").replace(" ", "") # 清理 AI 回答
+
+        # 3. 模糊比對 (Fuzzy Match) - 解決 "AI 多嘴" 的問題
+        # 方法 A: 直接包含檢查
         for ch in self.mgr.all_chapters:
-            if ch in ans: return ch, "AI判斷"
+            if ch in ai_response: 
+                return ch, "AI判斷"
+        
+        # 方法 B: 相似度比對 (Similarity) - 針對 AI 寫錯字或多字的狀況
+        # 找出與 AI 回答最像的章節
+        matches = difflib.get_close_matches(ai_response, self.mgr.all_chapters, n=1, cutoff=0.4)
+        if matches:
+            return matches[0], "AI(模糊)"
+
+        # 4. 真的沒救了，回傳預設值
         return self.default_ch, "預設"
 
 # ==========================================
 # 對外介面函數
 # ==========================================
+
+# 👇【快取核心】這個函式負責建立並「記住」Manager，避免每次重跑
 @st.cache_resource(show_spinner=False)
 def get_cached_manager(folder_name, note_filename, all_chapters_tuple):
     # 這裡必須把 list 轉成 tuple 才能被 cache，裡面再轉回 list
@@ -220,23 +248,10 @@ def process_uploaded_file(exam_type, uploaded_file):
     for output_conf in config['outputs']:
         all_chapters.extend(output_conf['chapters'])
 
-    # 👇【修改】原本是直接 new ChapterManager，現在改呼叫上面的快取函式
-    # 注意：我們把 all_chapters (list) 轉成 tuple 傳進去，因為 list 不能被雜湊(hash)
+    # 👇【修改】使用快取機制取得 Manager
+    # 注意：我們把 all_chapters (list) 轉成 tuple 傳進去，因為 list 不能被 Streamlit cache hash
     mgr = get_cached_manager(config['folder'], config['note_file'], tuple(all_chapters))
     
-    classifier = SmartClassifier(mgr, config['default_chapter'])
-    
-def process_uploaded_file(exam_type, uploaded_file):
-    config = EXAM_CONFIGS.get(exam_type)
-    if not config: return None
-
-    all_chapters = []
-    for output_conf in config['outputs']:
-        all_chapters.extend(output_conf['chapters'])
-
-    client = GeminiClient(GEMINI_API_KEY)
-    # 傳入 folder 名稱以便從 GitHub 讀取筆記
-    mgr = ChapterManager(config['folder'], config['note_file'], all_chapters, client)
     classifier = SmartClassifier(mgr, config['default_chapter'])
 
     try:
@@ -246,7 +261,6 @@ def process_uploaded_file(exam_type, uploaded_file):
         return None
 
     results = []
-    total_sheets = len(dfs)
     curr_sheet = 0
     progress_bar = st.progress(0, text="開始分類題目...")
 
@@ -270,6 +284,7 @@ def process_uploaded_file(exam_type, uploaded_file):
             r["分類來源"] = src
             results.append(r)
             
+            # 每 5 題更新一次進度，避免 UI 卡頓
             if idx % 5 == 0:
                 progress = (idx + 1) / total_rows
                 progress_bar.progress(progress, text=f"正在處理分頁 '{name}'：第 {idx+1}/{total_rows} 題")
