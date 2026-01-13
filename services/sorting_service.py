@@ -13,12 +13,13 @@ import streamlit as st
 from utils import github_handler as gh
 
 # ==========================================
-# 設定區
+# 設定區 (EXAM_CONFIGS) - 已根據您提供的 pa, ipa, fci 舊檔案進行校正
 # ==========================================
 BASE_BANK_DIR = "bank"
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 EXAM_CONFIGS = {
+    # 來自 pa_sorting.py 的邏輯
     "人身保險": {
         "folder": "人身",
         "note_file": "筆記_人身.pdf",
@@ -43,6 +44,8 @@ EXAM_CONFIGS = {
         ],
         "default_chapter": "投保實務與行銷"
     },
+    
+    # 來自 ipa_sorting.py 的邏輯
     "投資型保險": {
         "folder": "投資型",
         "note_file": "筆記_投資型.pdf",
@@ -64,6 +67,8 @@ EXAM_CONFIGS = {
         ],
         "default_chapter": "投資型保險概論"
     },
+    
+    # 來自 fci_sorting.py 的邏輯
     "外幣保單": {
         "folder": "外幣",
         "note_file": "筆記_外幣.pdf",
@@ -86,7 +91,7 @@ EXAM_CONFIGS = {
 COL_Q = "題目"
 
 # ==========================================
-# 工具類別 (Client & Logic)
+# 工具類別 (Client & Logic) - 維持高速批次處理引擎
 # ==========================================
 
 class GeminiClient:
@@ -95,7 +100,6 @@ class GeminiClient:
         self.model_name = "gemini-2.5-flash"
         
     def generate(self, prompt, temperature=0.1):
-        # 增加重試次數與等待時間，避免 API 429 錯誤
         for attempt in range(5):
             try:
                 response = self.client.models.generate_content(
@@ -128,14 +132,6 @@ class ChapterManager:
                 self.full_note_text = "\n".join(content)
         except: pass
 
-    def _get_context(self, chapter):
-        # 簡化版 Context 抓取，只抓最相關的一小段以節省 Token
-        if not self.full_note_text: return ""
-        idx = self.full_note_text.find(chapter)
-        if idx != -1:
-            return self.full_note_text[idx:idx+800]
-        return ""
-
     def _gen_keywords(self):
         if not self.full_note_text:
             for ch in self.all_chapters: self.chapter_keywords[ch] = [ch]
@@ -144,21 +140,18 @@ class ChapterManager:
         progress_text = "AI 正在閱讀筆記建立索引 (只需執行一次)..."
         my_bar = st.progress(0, text=progress_text)
         
-        # 批次處理關鍵字生成，不要一章一章問
         prompt = (
             f"你是保險考題分類專家。請閱讀筆記後，針對下列章節，各列出 5 個最關鍵的專有名詞。\n"
             f"章節列表：{self.all_chapters}\n"
-            f"筆記內容摘要：{self.full_note_text[:5000]}...\n\n"
+            f"筆記內容摘要：{self.full_note_text[:8000]}...\n\n" # 增加讀取量
             f"請回傳 JSON 格式：{{ \"章節名\": [\"關鍵字1\", \"關鍵字2\"...] }}"
         )
         try:
             res = self.ai.generate(prompt)
             data = json.loads(res)
-            # 確保所有章節都有 key
             for ch in self.all_chapters:
                 self.chapter_keywords[ch] = data.get(ch, [ch])
         except:
-            # 失敗回退機制
             for ch in self.all_chapters: self.chapter_keywords[ch] = [ch]
             
         my_bar.progress(1.0, text="索引建立完成！")
@@ -169,17 +162,15 @@ class SmartClassifier:
     def __init__(self, mgr, default_ch):
         self.mgr = mgr
         self.default_ch = default_ch
-        self.chapters_str = "\n".join([f"- {c}" for c in mgr.all_chapters])
 
     def classify_batch(self, batch_data):
         """
         批次分類核心邏輯
-        batch_data: list of dict [{'id': 0, 'q': '...', 'opts': '...'}, ...]
         """
         results = {}
         ai_queue = []
 
-        # 1. 先用關鍵字快速篩選 (本地運算，極快)
+        # 1. 關鍵字快速篩選
         for item in batch_data:
             full_text = f"{item['q']} {item['opts']}"
             scores = Counter()
@@ -196,9 +187,8 @@ class SmartClassifier:
             else:
                 ai_queue.append(item)
 
-        # 2. 剩下的打包問 AI (減少 API 呼叫次數)
+        # 2. AI 批次判斷
         if ai_queue:
-            # 限制一次問 10 題，避免 Token 爆掉
             prompt_items = []
             for item in ai_queue:
                 prompt_items.append(f"ID {item['id']}:\n題目: {item['q']}\n選項: {item['opts']}")
@@ -207,31 +197,23 @@ class SmartClassifier:
             prompt = (
                 f"請將下列題目分類到最合適的章節。可選章節：\n{self.mgr.all_chapters}\n\n"
                 f"{prompt_str}\n\n"
-                f"請直接回傳 JSON 格式，不要有Markdown標記：\n"
-                f"[{{ \"id\": 題號, \"chapter\": \"章節名稱\" }}, ...]"
+                f"請直接回傳 JSON 格式：\n"
+                f"[{{ \"id\": \"ID字串\", \"chapter\": \"章節名稱\" }}, ...]"
             )
             
             try:
-                # 呼叫 AI
                 res_text = self.mgr.ai.generate(prompt)
-                # 清理可能的回傳雜訊
                 res_text = res_text.replace("```json", "").replace("```", "")
                 ai_results = json.loads(res_text)
                 
-                # 解析回傳
                 for res in ai_results:
                     res_id = res.get('id')
                     raw_ch = res.get('chapter', self.default_ch)
-                    
-                    # 模糊比對章節名稱 (防止 AI 寫錯字)
                     matches = difflib.get_close_matches(raw_ch, self.mgr.all_chapters, n=1, cutoff=0.4)
                     final_ch = matches[0] if matches else self.default_ch
-                    
                     results[res_id] = (final_ch, "AI判斷")
-                    
             except Exception as e:
                 print(f"Batch AI Failed: {e}")
-                # 失敗時全部歸為預設
                 for item in ai_queue:
                     results[item['id']] = (self.default_ch, "預設(API失敗)")
 
@@ -258,6 +240,7 @@ def process_uploaded_file(exam_type, uploaded_file):
     classifier = SmartClassifier(mgr, config['default_chapter'])
 
     try:
+        # 讀取 Excel，這裡會根據設定自動去找選項欄位
         dfs = pd.read_excel(uploaded_file, sheet_name=None)
     except Exception as e:
         st.error(f"Excel 讀取失敗: {e}")
@@ -266,20 +249,18 @@ def process_uploaded_file(exam_type, uploaded_file):
     final_results = []
     progress_bar = st.progress(0, text="準備開始分類...")
     
-    # 預先計算總題數以顯示進度
     total_rows = sum(len(df) for df in dfs.values() if not df.empty and COL_Q in df.columns)
     processed_count = 0
-    
-    BATCH_SIZE = 10  # 每 10 題問一次 AI
+    BATCH_SIZE = 10 
 
     for name, df in dfs.items():
         if df.empty or COL_Q not in df.columns: continue
         
+        # ⚠️ 這裡會動態根據考科抓取正確的選項欄位 (1,2,3 或 一,二,三)
         valid_opts = [c for c in config['col_opts'] if c in df.columns]
         
-        # 準備批次資料容器
         batch_buffer = [] 
-        rows_map = {} # 用 id 對應 row 資料
+        rows_map = {}
         
         for idx, row in df.iterrows():
             q = str(row.get(COL_Q, "")).strip()
@@ -287,19 +268,14 @@ def process_uploaded_file(exam_type, uploaded_file):
             
             opts_txt = " ".join([str(row.get(c, "")) for c in valid_opts])
             
-            # 給每個題目一個唯一 ID (Sheet名_Index)
             unique_id = f"{name}_{idx}"
             item = {'id': unique_id, 'q': q, 'opts': opts_txt}
             
             batch_buffer.append(item)
             rows_map[unique_id] = row.to_dict()
             
-            # 當 Buffer 滿了，或是最後一題，就執行批次分類
             if len(batch_buffer) >= BATCH_SIZE or idx == len(df) - 1:
-                # 執行分類！
                 batch_results = classifier.classify_batch(batch_buffer)
-                
-                # 將結果寫回 row
                 for item in batch_buffer:
                     res = batch_results.get(item['id'], (config['default_chapter'], "預設"))
                     r = rows_map[item['id']]
@@ -307,21 +283,18 @@ def process_uploaded_file(exam_type, uploaded_file):
                     r["分類來源"] = res[1]
                     final_results.append(r)
                 
-                # 更新進度條
                 processed_count += len(batch_buffer)
                 progress = min(processed_count / total_rows, 1.0)
                 progress_bar.progress(progress, text=f"🔥 高速分類中：{processed_count}/{total_rows} 題")
                 
-                # 清空 Buffer
                 batch_buffer = []
-                
-                # 微小休息，避免太過頻繁
-                time.sleep(2) # 批次模式下，這裡休息 2 秒非常安全
+                time.sleep(2)
 
     progress_bar.empty()
     return pd.DataFrame(final_results)
 
 def save_merged_results(exam_type, new_classified_df):
+    # 此函式維持不變，負責將結果推回 GitHub
     config = EXAM_CONFIGS.get(exam_type)
     base_gh_path = f"{BASE_BANK_DIR}/{config['folder']}"
     logs = []
