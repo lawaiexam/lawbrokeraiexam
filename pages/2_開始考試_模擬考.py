@@ -18,50 +18,42 @@ from components.question_render import render_question
 # ==========================================
 
 # 1. 考題結構定義 (NEW_EXAM_WEIGHTS)
-# 這裡定義了：證照 -> 科目 (Subject) -> 章節 (Chapter) 的權重
 NEW_EXAM_WEIGHTS = {
     "人身保險業務員資格測驗": {
-        # 第一節：保險法規
         "life_regulation": {
-            "insurance_law_core": 40,   # 保險法（總則／契約／基本規範）
-            "solicitation_rules": 40,   # 招攬行為與業務員管理規範
-            "liability_penalties": 20   # 責任歸屬與罰則
+            "insurance_law_core": 40,
+            "solicitation_rules": 40,
+            "liability_penalties": 20
         },
-        # 第二節：保險實務
         "life_practice": {
-            "insurance_principles": 30, # 保險學原理與風險概念
-            "life_products": 50,        # 人身保險商品
-            "sales_practice_ethics": 20 # 招攬實務與倫理
+            "insurance_principles": 30,
+            "life_products": 50,
+            "sales_practice_ethics": 20
         }
     },
     "外幣收付非投資型保險商品測驗": {
-        # 單一科目
         "fx_exam": {
-            "fx_basics": 28,                # 外匯與匯率基礎
-            "fx_products": 28,              # 外幣非投資型商品與交易流程
-            "fx_regulation_compliance": 22, # 法令規範與遵循
-            "fx_risk_disclosure_practice": 22 # 風險揭露與銷售實務
+            "fx_basics": 28,
+            "fx_products": 28,
+            "fx_regulation_compliance": 22,
+            "fx_risk_disclosure_practice": 22
         }
     },
     "投資型保險商品業務員測驗": {
-        # 第一節：法令規章 (注意：實際考試順序可能不同，這裡以 Subject ID 為準)
         "il_regulations": {
-            "sales_regulations": 50,    # 銷售規範與資訊揭露
-            "suitability_rules": 30,    # 適合度規範
-            "dispute_liability": 20     # 責任與爭議處理
+            "sales_regulations": 50,
+            "suitability_rules": 30,
+            "dispute_liability": 20
         },
-        # 第二節：投資實務
         "il_investment_practice": {
-            "investment_basics": 45,        # 投資工具與風險報酬
-            "il_product_mechanics": 45,     # 投資型商品機制
-            "customer_suitability_practice": 10 # 客戶適合度與銷售流程實務
+            "investment_basics": 45,
+            "il_product_mechanics": 45,
+            "customer_suitability_practice": 10
         }
     }
 }
 
-# 2. 科目識別映射 (Subject Mapping)
-# 透過模擬考設定的「節次名稱」來尋找對應的「Subject ID」
-# 關鍵字比對：只要節次名稱包含 key 中的文字，就視為該科目
+# 2. 科目識別映射
 SUBJECT_IDENTIFIER = {
     "人身保險業務員資格測驗": {
         "法規": "life_regulation",
@@ -74,17 +66,15 @@ SUBJECT_IDENTIFIER = {
     "投資型保險商品業務員測驗": {
         "法令": "il_regulations",
         "規章": "il_regulations",
-        "第一節": "il_regulations", # 假設第一節是考法規
+        "第一節": "il_regulations",
         "實務": "il_investment_practice",
-        "第二節": "il_investment_practice" # 假設第二節是考實務
+        "第二節": "il_investment_practice"
     }
 }
 
-# 3. 章節歸類映射 (Chapter Mapping)
-# 將 AI 分類的「中文章節名稱」歸類到 JSON 定義的「Chapter ID」
+# 3. 章節歸類映射
 CHAPTER_MAPPING = {
-    # === 人身保險 ===
-    "保險法規": { # 對應 Subject ID: life_regulation
+    "保險法規": {
         "保險契約": "insurance_law_core",
         "保險契約六大原則": "insurance_law_core",
         "契約解除、無效、失效、停效、復效": "insurance_law_core",
@@ -96,7 +86,7 @@ CHAPTER_MAPPING = {
         "洗錢防制法": "liability_penalties", 
         "保險業務員相關法規及規定": "solicitation_rules"
     },
-    "保險實務": { # 對應 Subject ID: life_practice
+    "保險實務": {
         "風險與風險管理": "insurance_principles",
         "人身保險歷史及生命表": "insurance_principles",
         "保險費架構、解約金、準備金、保單紅利": "insurance_principles",
@@ -110,9 +100,7 @@ CHAPTER_MAPPING = {
         "投保實務與行銷": "sales_practice_ethics",
         "繼承相關": "sales_practice_ethics"
     },
-
-    # === 外幣保單 ===
-    "外幣非投資型": { # 對應 Subject ID: fx_exam
+    "外幣非投資型": {
         "壽險基本概念": "fx_basics",
         "人身保險業辦理以外幣收付之非投資型人身保險業務應具備資格條件及注意事項": "fx_products",
         "保險業辦理外匯業務管理辦法": "fx_regulation_compliance",
@@ -123,19 +111,16 @@ CHAPTER_MAPPING = {
         "銷售應注意事項": "fx_risk_disclosure_practice",
         "新型態人身保險商品審查": "fx_risk_disclosure_practice",
         "投資型保險專設帳簿保管機構及投資標的應注意事項": "fx_risk_disclosure_practice",
-        "投資型保險觀念": "fx_products" # 歸類到產品
+        "投資型保險觀念": "fx_products"
     },
-
-    # === 投資型保險 ===
-    "投資型法規": { # 對應 Subject ID: il_regulations
+    "投資型法規": {
         "投資型保險法令介紹": "sales_regulations",
         "證券投資信託及顧問之規範與制度": "sales_regulations",
         "銷售應注意事項": "sales_regulations",
-        # 若有 AI 分類到這類，映射到適合度
         "適合度": "suitability_rules",
         "爭議處理": "dispute_liability"
     },
-    "投資型實務": { # 對應 Subject ID: il_investment_practice
+    "投資型實務": {
         "貨幣時間價值": "investment_basics",
         "債券評價": "investment_basics",
         "證券評價": "investment_basics",
@@ -146,22 +131,14 @@ CHAPTER_MAPPING = {
         "投資型保險概論": "il_product_mechanics",
         "投資型保險觀念": "il_product_mechanics",
         "投資型保險專設帳簿保管機構及投資標的應注意事項": "il_product_mechanics",
-        # 實務上的銷售流程
         "客戶適合度": "customer_suitability_practice"
     }
 }
 
 # ==========================================
-# 🟢 核心函式：權重化抽題 (Advanced)
+# 🟢 核心函式：權重化抽題 (V2)
 # ==========================================
 def build_weighted_paper_v2(full_df, cert_type, section_name, total_questions, shuffle_options=False):
-    """
-    根據新版 JSON 邏輯進行抽題。
-    1. 識別當前考科 (Subject)。
-    2. 取得該考科的章節權重。
-    3. 將 AI 分類映射到 JSON 章節 ID。
-    4. 執行加權抽樣。
-    """
     target_col = "AI分類章節"
     if full_df.empty or target_col not in full_df.columns:
         return full_df.sample(n=min(len(full_df), total_questions)).to_dict('records')
@@ -169,28 +146,21 @@ def build_weighted_paper_v2(full_df, cert_type, section_name, total_questions, s
     # 1. 識別 Subject ID
     subject_id = None
     cert_identifiers = SUBJECT_IDENTIFIER.get(cert_type, {})
-    
-    # 嘗試用節次名稱來匹配 (例如 "第一節：保險法規" -> 匹配 "法規" -> "life_regulation")
     for keyword, sid in cert_identifiers.items():
         if keyword in section_name:
             subject_id = sid
             break
             
-    # 如果找不到對應的 Subject，退回自然分佈抽樣
     if not subject_id:
-        print(f"Warning: Could not identify subject for section '{section_name}' in cert '{cert_type}'. Using standard distribution.")
         return _build_paper_by_natural_distribution(full_df, total_questions)
 
-    # 2. 取得該 Subject 的權重設定
+    # 2. 取得權重設定
     cert_weights = NEW_EXAM_WEIGHTS.get(cert_type, {})
     chapter_weights = cert_weights.get(subject_id, {})
-    
     if not chapter_weights:
         return _build_paper_by_natural_distribution(full_df, total_questions)
 
-    # 3. 建立映射表 (AI Chapter -> JSON Chapter ID)
-    # 為了簡化，我們將 CHAPTER_MAPPING 扁平化搜尋，或建立一個臨時的大表
-    # 這裡採用簡單策略：根據 subject_id 找對應的 mapping key
+    # 3. 建立映射表
     mapping_key_map = {
         "life_regulation": "保險法規",
         "life_practice": "保險實務",
@@ -202,55 +172,40 @@ def build_weighted_paper_v2(full_df, cert_type, section_name, total_questions, s
     current_mapping = CHAPTER_MAPPING.get(mapping_category, {})
 
     # 4. 為 DataFrame 標記 JSON Chapter ID
-    # 如果找不到映射，標記為 "others"
     df_temp = full_df.copy()
     df_temp["JsonChapterID"] = df_temp[target_col].map(current_mapping).fillna("others")
 
-    # 5. 計算各章節目標題數
+    # 5. 計算目標題數並抽樣
     exam_pool = []
-    
-    # 遍歷權重設定 (例如 insurance_law_core: 40%)
     for ch_id, weight_pct in chapter_weights.items():
         target_count = int(round(total_questions * (weight_pct / 100)))
-        
-        # 從 df_temp 中找出屬於這個 ch_id 的題目
-        # 注意：多個 AI 章節可能對應到同一個 ch_id
         chapter_pool = df_temp[df_temp["JsonChapterID"] == ch_id]
-        
-        available = len(chapter_pool)
-        take_n = min(available, target_count)
-        
+        take_n = min(len(chapter_pool), target_count)
         if take_n > 0:
-            selected = chapter_pool.sample(n=take_n)
-            exam_pool.append(selected)
+            exam_pool.append(chapter_pool.sample(n=take_n))
 
-    # 6. 補題機制 (處理 "others" 或 四捨五入造成的不足)
+    # 6. 補題機制
     current_selected = pd.concat(exam_pool) if exam_pool else pd.DataFrame()
     needed = total_questions - len(current_selected)
     
     if needed > 0:
-        # 優先從 "others" (未歸類但屬於本檔的題目) 抽
         others_pool = df_temp[~df_temp.index.isin(current_selected.index)]
         if not others_pool.empty:
             extra = others_pool.sample(n=min(len(others_pool), needed))
             exam_pool.append(extra)
             
-    # 合併
     if exam_pool:
         final_df = pd.concat(exam_pool)
     else:
         final_df = pd.DataFrame()
 
-    # 7. 總數控制
     if len(final_df) > total_questions:
         final_df = final_df.sample(n=total_questions)
 
-    # 8. 打亂
     final_df = final_df.sample(frac=1).reset_index(drop=True)
     return final_df.to_dict('records')
 
 def _build_paper_by_natural_distribution(full_df, total_questions):
-    """備用：依題庫自然分佈抽樣"""
     target_col = "AI分類章節"
     if target_col not in full_df.columns:
         return full_df.sample(n=min(len(full_df), total_questions)).to_dict('records')
@@ -305,12 +260,10 @@ if not sections:
     st.error("此證照類別沒有設定模擬考規則（MOCK_SPECS）。")
     st.stop()
 
-# ========= 初始化狀態 =========
 if "mock_section_idx" not in st.session_state: st.session_state.mock_section_idx = 0
 if "mock_section_results" not in st.session_state: st.session_state.mock_section_results = []
 if "mock_exam_start_ts" not in st.session_state: st.session_state.mock_exam_start_ts = None
 
-# ========= 取得目前節次 =========
 sec_idx = int(st.session_state.mock_section_idx)
 if sec_idx >= len(sections):
     st.session_state.mock_section_idx = 0
@@ -327,7 +280,6 @@ if n_questions <= 0:
     st.error("模擬考規則設定不完整，請檢查 MOCK_SPECS。")
     st.stop()
 
-# ========= 載入本節題庫 =========
 try:
     bank_path = CERT_CATALOG[settings["cert_type"]]["subjects"][section_name]
 except Exception:
@@ -336,9 +288,40 @@ except Exception:
 
 df = load_bank_df(settings.get("cert_type", ""), merge_all=False, bank_source_path=bank_path)
 
+# ==========================================
+# 🚑 HOTFIX: 資料格式救援補丁 (Data Schema Patch)
+# ==========================================
 if df is None or df.empty:
     st.warning("尚未載入題庫，請確認題庫檔案是否存在。")
     st.stop()
+
+# 1. 確保 ID 欄位存在
+if "ID" not in df.columns and "編號" in df.columns:
+    df["ID"] = df["編號"]
+
+# 2. 確保 Choices 欄位存在
+if "Choices" not in df.columns:
+    def pack_choices(row):
+        options = []
+        mapping = [
+            ("A", ["選項一", "Option A", "A"]),
+            ("B", ["選項二", "Option B", "B"]),
+            ("C", ["選項三", "Option C", "C"]),
+            ("D", ["選項四", "Option D", "D"]),
+            ("E", ["選項五", "Option E", "E"])
+        ]
+        for label, cols in mapping:
+            for col in cols:
+                if col in row and pd.notna(row[col]):
+                    val = str(row[col]).strip()
+                    if val: options.append((label, val))
+                    break
+        return options
+    df["Choices"] = df.apply(pack_choices, axis=1)
+
+# ==========================================
+# 🚑 補丁結束
+# ==========================================
 
 st.session_state.df = df
 filtered = df
@@ -350,7 +333,6 @@ with st.expander("本次模擬考規格", expanded=True):
     st.write(f"- 類別：{settings['cert_type']}")
     st.write(f"- 模式：{'兩節連考' if len(sections) > 1 else '單節'}")
     
-    # 識別當前權重設定
     subject_id = None
     for kw, sid in SUBJECT_IDENTIFIER.get(settings["cert_type"], {}).items():
         if kw in section_name:
@@ -370,7 +352,6 @@ with st.expander("本次模擬考規格", expanded=True):
 st.divider()
 st.subheader(f"第 {sec_idx+1} 節：{section_name}")
 
-# ========= 控制按鈕 =========
 colA, colB = st.columns([1, 1])
 
 def _reset_whole_mock_exam():
@@ -384,15 +365,13 @@ def _reset_whole_mock_exam():
 
 with colA:
     if st.button("開始本節", type="primary"):
-        # 🟢 呼叫 V2 版權重抽題
         st.session_state.paper = build_weighted_paper_v2(
             filtered,
             settings["cert_type"],
-            section_name, # 傳入節次名稱以識別 Subject
+            section_name,
             n_questions,
             shuffle_options=settings["shuffle_options"]
         )
-        
         st.session_state.answers = {}
         st.session_state.started = True
         st.session_state.show_results = False
@@ -413,7 +392,6 @@ if not paper:
     st.info("請先按「開始本節」。")
     st.stop()
 
-# ========= Timer =========
 if st.session_state.get("time_limit") and st.session_state.get("start_ts"):
     elapsed = int(time.time() - st.session_state.start_ts)
     remain = max(0, st.session_state.time_limit - elapsed)
@@ -425,7 +403,6 @@ if st.session_state.get("time_limit") and st.session_state.get("start_ts"):
         st.session_state.show_results = True
         st.rerun()
 
-# ========= 作答區 =========
 if not st.session_state.get("show_results"):
     st.subheader("作答區")
     for idx, q in enumerate(paper, start=1):
@@ -437,7 +414,6 @@ if not st.session_state.get("show_results"):
         st.session_state.show_results = True
         st.rerun()
 
-# ========= 交卷後處理 =========
 if not st.session_state.get("show_results"): st.stop()
 
 results_df, score_tuple, wrong_df = grade_paper(paper, st.session_state.answers)
@@ -466,7 +442,6 @@ if st.session_state.mock_section_idx < len(sections):
     if st.button("前往下一節", type="primary"): st.rerun()
     st.stop()
 
-# ========= 結算 =========
 section_results = st.session_state.mock_section_results
 section_scores = {s["section"]: int(s["score"]) for s in section_results}
 total_score = int(sum(s["score"] for s in section_results))
