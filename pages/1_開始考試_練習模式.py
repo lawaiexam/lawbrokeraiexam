@@ -1,5 +1,5 @@
 import time
-import pandas as pd  # ✅ 確保引入 pandas
+import pandas as pd
 import streamlit as st
 
 from services.state_service import ensure_state
@@ -24,10 +24,9 @@ if user is None:
 st.title("開始考試 - 練習模式")
 
 with st.sidebar:
-    # ✅ 明確指定練習模式
     settings = render_exam_settings(mode="practice")
 
-# ========= 載入題庫（練習模式：選檔 / merge_all） =========
+# ========= 載入題庫 =========
 df = load_bank_df(
     settings["bank_type"],
     settings["merge_all"],
@@ -39,47 +38,101 @@ if df is None or df.empty:
     st.stop()
 
 # ==========================================
-# 🚑 HOTFIX: 資料格式救援補丁 (Data Schema Patch)
+# 🚑 HOTFIX V4: 終極全能資料清洗補丁 (The Universal Cleaner)
 # ==========================================
-# 原因：新上傳的題庫是 Raw Data (選項一, 選項二...)，但 UI 需要 'Choices' 與 'ID' 欄位。
+# 支援：
+# 1. ID: 兼容 '編號' 與 '題目編號'
+# 2. Options: 兼容 '選項一'(人身/外幣) 與 '選項1'(投資型)
+# 3. Answer: 兼容 '正確選項'欄位 與 '選項前加*'
+# ==========================================
+try:
+    # 1. 清洗欄位名稱 (去除前後空白)
+    df.columns = df.columns.str.strip()
 
-# 1. 確保 ID 欄位存在
-if "ID" not in df.columns and "編號" in df.columns:
-    df["ID"] = df["編號"] # 將中文編號複製一份給 ID
+    # 2. 統一 ID 欄位
+    if "ID" not in df.columns:
+        if "編號" in df.columns:
+            df["ID"] = df["編號"]
+        elif "題目編號" in df.columns:  # 投資型題庫特有
+            df["ID"] = df["題目編號"]
+        else:
+            # 萬一真的都沒有，自動產生
+            df["ID"] = range(1, len(df) + 1)
 
-# 2. 確保 Choices 欄位存在 (打包選項)
-if "Choices" not in df.columns:
-    def pack_choices(row):
-        options = []
-        # 定義映射：顯示代號 -> 可能的欄位名稱列表
-        mapping = [
-            ("A", ["選項一", "Option A", "A"]),
-            ("B", ["選項二", "Option B", "B"]),
-            ("C", ["選項三", "Option C", "C"]),
-            ("D", ["選項四", "Option D", "D"]),
-            ("E", ["選項五", "Option E", "E"])
-        ]
+    # 定義選項映射表 (Label -> 可能的欄位名)
+    # 優先順序：選項一 > 選項1 > Option A
+    option_map_config = [
+        ('A', ['選項一', '選項1', 'Option A', 'A']),
+        ('B', ['選項二', '選項2', 'Option B', 'B']),
+        ('C', ['選項三', '選項3', 'Option C', 'C']),
+        ('D', ['選項四', '選項4', 'Option D', 'D']),
+        ('E', ['選項五', '選項5', 'Option E', 'E'])
+    ]
+
+    # 3. 處理正確答案 (Answer)
+    if "Answer" not in df.columns:
+        # 策略 A: 優先找「正確選項」欄位 (外幣題庫)
+        if "正確選項" in df.columns:
+            def normalize_answer(val):
+                val_str = str(val).strip()
+                # 數字轉代號 (1->A, 2->B...)
+                mapping = {'1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E'}
+                return mapping.get(val_str, val_str) # 如果本來就是 A 就回傳 A
+            df["Answer"] = df["正確選項"].apply(normalize_answer)
         
-        for label, cols in mapping:
-            for col in cols:
-                # 如果欄位存在且內容不為空 (NaN)
-                if col in row and pd.notna(row[col]):
-                    val = str(row[col]).strip()
-                    if val: 
-                        options.append((label, val))
-                    break # 找到對應欄位就跳出，繼續找下一個代號
-        return options
+        # 策略 B: 找不到欄位，改去選項裡找星號 * (人身、投資型)
+        else:
+            def extract_star_answer(row):
+                for label, possible_cols in option_map_config:
+                    for col in possible_cols:
+                        if col in row and pd.notna(row[col]):
+                            # 如果該選項開頭是 *，那就是答案
+                            if str(row[col]).strip().startswith("*"):
+                                return label
+                return "" # 沒找到
+            
+            df["Answer"] = df.apply(extract_star_answer, axis=1)
 
-    # 套用轉換函數
-    df["Choices"] = df.apply(pack_choices, axis=1)
+            # ⚠️ 重要：把選項裡的 * 號洗掉，以免考試時洩題
+            # 掃描所有可能的選項欄位
+            all_opt_cols = [col for _, cols in option_map_config for col in cols]
+            for c in all_opt_cols:
+                if c in df.columns:
+                    df[c] = df[c].apply(lambda x: str(x).lstrip('*') if pd.notna(x) else x)
 
+    # 4. 強力打包選項 (Choices)
+    if "Choices" not in df.columns:
+        def universal_pack(row):
+            choices = []
+            for label, possible_cols in option_map_config:
+                # 尋找該選項對應的欄位 (例如找 A 對應的欄位)
+                found_text = None
+                for col in possible_cols:
+                    if col in row and pd.notna(row[col]):
+                        val = str(row[col]).strip()
+                        if val and val.lower() != "nan":
+                            found_text = val
+                            break # 找到一個就夠了
+                
+                if found_text:
+                    choices.append((label, found_text))
+            return choices
+
+        df["Choices"] = df.apply(universal_pack, axis=1)
+
+    # 5. 處理詳解
+    if "Explanation" not in df.columns and "解答說明" in df.columns:
+        df["Explanation"] = df["解答說明"]
+
+except Exception as e:
+    st.error(f"資料格式轉換失敗：{e}")
+    st.stop()
 # ==========================================
 # 🚑 補丁結束
 # ==========================================
 
 st.session_state.df = df
 
-# 顯示用名稱（練習模式保留你原本邏輯）
 if settings["merge_all"]:
     bank_label = f"{settings['bank_type']}（全部題庫）"
 elif settings["bank_source"]:
@@ -89,7 +142,7 @@ else:
 
 st.session_state.current_bank_name = bank_label
 
-# ========= 篩選器 (Tags) =========
+# ========= 篩選器 =========
 all_tags = get_all_tags(df)
 selected_tags = []
 if all_tags:
@@ -103,7 +156,7 @@ if filtered.empty:
 
 st.caption(f"目前題庫：{bank_label}｜共 {len(filtered)} 題")
 
-# ========= 練習模式 State 初始化 =========
+# ========= State 初始化 =========
 if "practice_idx" not in st.session_state:
     st.session_state.practice_idx = 0
 if "practice_shuffled" not in st.session_state:
@@ -117,7 +170,6 @@ if "hints" not in st.session_state:
 
 # 當題庫變更時重置
 if st.session_state.get("last_bank_sig") != (bank_label, len(filtered), tuple(selected_tags)):
-    # 重新洗牌
     paper = build_paper(
         filtered,
         n_questions=len(filtered),
@@ -136,18 +188,16 @@ if not paper:
     st.info("沒有題目。")
     st.stop()
 
-# ========= 顯示題目 (逐題模式) =========
+# ========= 顯示題目 =========
 total = len(paper)
 i = st.session_state.practice_idx
 q = paper[i]
 
-# 進度條
 progress = (i + 1) / total
 st.progress(progress, text=f"第 {i+1} / {total} 題 （答對：{st.session_state.practice_correct}）")
 
 st.divider()
 
-# AI Hint
 if ai.gemini_ready():
     if st.button(f"💡 AI 提示（Q{i+1}）", key=f"ai_hint_practice_{i}"):
         ck, sys, usr = ai.build_hint_prompt(q)
@@ -166,18 +216,25 @@ picked_labels = render_question(
 
 # ========= 提交作答 =========
 if st.button("提交這題", key=f"practice_submit_{i}"):
-    gold = set(q["Answer"])
+    raw_ans = q.get("Answer")
+    # 轉成 set 以便比對
+    if isinstance(raw_ans, str):
+        gold = {raw_ans}
+    elif isinstance(raw_ans, (list, tuple)):
+        gold = set(raw_ans)
+    else:
+        gold = set()
+
     st.session_state.practice_answers[q["ID"]] = picked_labels
 
     if picked_labels == gold:
         st.success("✅ 答對了！")
         st.session_state.practice_correct += 1
     else:
-        st.error(f"❌ 答錯了。正確：{', '.join(sorted(list(gold))) or '(空)'}")
+        st.error(f"❌ 答錯了。正確：{', '.join(sorted(list(gold))) or '(未知)'}")
         if str(q.get("Explanation", "")).strip():
             st.caption(f"📖 題庫詳解：{q['Explanation']}")
 
-# ========= 導航 =========
 cols = st.columns([1, 1])
 with cols[0]:
     if st.button("上一題", disabled=(i == 0)):
