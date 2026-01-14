@@ -6,12 +6,12 @@ from io import BytesIO
 from .github_handler import gh_download_bytes
 
 # ==============================================================================
-# 核心資料清洗邏輯 (Universal Cleaner)
+# 核心資料清洗邏輯 (Universal Cleaner V6)
 # ==============================================================================
 def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    通用資料清洗函式 (整合 HOTFIX V5 邏輯)
-    統一處理：欄位去除空白、ID標準化、題目映射、Answer/Option 映射、星號答案提取、打包 Choices
+    通用資料清洗函式 (V6 最終強化版)
+    修正：答案欄位強力轉型 (處理 (2), 2.0, B 等雜訊)、補強題目映射
     """
     if df is None or df.empty:
         return df
@@ -56,7 +56,8 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
         ]
 
         # 5. 處理正確答案 (Answer) - 混合策略
-        # 步驟 5a: 先嘗試標準化現有的答案欄位 (如果有)
+        
+        # 5a. 尋找答案欄位
         ans_col = None
         for c in ["Answer", "正確選項", "答案", "標準答案", "qp_right", "CorrectAnswer"]:
             if c in df.columns:
@@ -65,21 +66,30 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
         
         if ans_col:
             def normalize_answer(val):
-                val_str = str(val).strip().upper()
-                mapping = {'1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E'}
-                if val_str.endswith(".0"): val_str = val_str[:-2]
-                return mapping.get(val_str, val_str)
+                # 強力標準化：轉字串 -> 去空白 -> 轉大寫
+                s = str(val).strip().upper()
+                # 去除括號 (A) -> A, (1) -> 1
+                s = s.replace("(", "").replace(")", "").replace("（", "").replace("）", "")
+                # 去除小數點 1.0 -> 1
+                if s.endswith(".0"): s = s[:-2]
+                
+                # 映射表
+                mapping = {
+                    '1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E',
+                    '一': 'A', '二': 'B', '三': 'C', '四': 'D', '五': 'E'
+                }
+                # 如果是數字鍵則轉換，否則保留原樣 (如 'A', 'AB')
+                return mapping.get(s, s)
             
-            # 將標準化後的結果存入 "Answer"
             df["Answer"] = df[ans_col].apply(normalize_answer)
         else:
-            # 若完全沒答案欄位，先初始化為空字串，待會由星號填補
             df["Answer"] = ""
 
-        # 步驟 5b: 掃描選項中的星號 (補強邏輯：即使有答案欄位，若為空值也嘗試用星號補)
+        # 5b. 掃描選項中的星號 (補強：若答案欄為空或無效，再次掃描選項)
         def extract_star_answer(row):
-            # 如果原本已經有有效答案，就直接用
+            # 檢查現有答案是否有效 (必須是 A-E 或是組合)
             current_ans = str(row.get("Answer", "")).strip()
+            # 簡單判斷：如果有內容且不是 nan，就信任它
             if current_ans and current_ans.lower() != "nan":
                 return current_ans
             
@@ -89,21 +99,20 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
                 for col in possible_cols:
                     if col in row and pd.notna(row[col]):
                         txt = str(row[col]).strip()
+                        # 支援全形與半形星號
                         if txt.startswith("*") or txt.startswith("＊"):
                             stars.append(label)
             return "".join(stars)
 
         df["Answer"] = df.apply(extract_star_answer, axis=1)
 
-        # 步驟 5c: 移除選項文字中的星號 (無論如何都要執行，保持介面乾淨)
+        # 5c. 移除選項文字中的星號 (保持介面乾淨)
         all_opt_cols = [col for _, cols in option_map_config for col in cols]
         for c in all_opt_cols:
             if c in df.columns:
-                # 只移除開頭的星號與空白
                 df[c] = df[c].apply(lambda x: str(x).lstrip('*').lstrip('＊').strip() if pd.notna(x) else x)
 
         # 6. 強力打包選項 (Choices)
-        # 注意：此時選項已無星號，Answer 已提取完畢
         if "Choices" not in df.columns:
             def universal_pack(row):
                 choices = []
@@ -240,8 +249,10 @@ def sample_paper(df, n, random_order=True, shuffle_options=True):
         current_choices = list(choices)
 
         # 舊答案 (字串集合)
-        raw_ans_str = str(r.get("Answer", "")).upper().strip() # "A" or "AB"
-        
+        raw_ans_str = str(r.get("Answer", "")).upper().strip() 
+        # 防止 nan 跑出來
+        if raw_ans_str == "NAN": raw_ans_str = ""
+
         # 建立舊 Label 對映表
         label_to_text = {lab: txt for lab, txt in current_choices}
 
