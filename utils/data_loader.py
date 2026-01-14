@@ -11,7 +11,7 @@ from .github_handler import gh_download_bytes
 def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     通用資料清洗函式 (整合 HOTFIX V4 邏輯)
-    統一處理：欄位去除空白、ID標準化、Answer/Option 映射、星號答案提取、打包 Choices
+    統一處理：欄位去除空白、ID標準化、題目映射、Answer/Option 映射、星號答案提取、打包 Choices
     """
     if df is None or df.empty:
         return df
@@ -25,14 +25,28 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 
         # 2. 統一 ID 欄位
         if "ID" not in df.columns:
-            if "編號" in df.columns:
-                df["ID"] = df["編號"]
-            elif "題目編號" in df.columns:
-                df["ID"] = df["題目編號"]
-            elif "qp_id" in df.columns:
-                df["ID"] = df["qp_id"]
-            else:
+            # 常見的編號欄位名稱
+            for c in ["編號", "題目編號", "題號", "qp_id"]:
+                if c in df.columns:
+                    df.rename(columns={c: "ID"}, inplace=True)
+                    break
+            # 如果還是沒有，自動產生
+            if "ID" not in df.columns:
                 df["ID"] = range(1, len(df) + 1)
+
+        # 3. 統一 題目 (Question) 欄位 [🔴 修正重點：補上這段映射]
+        if "Question" not in df.columns:
+            for c in ["題目", "題幹", "題目內容", "qp_title", "問題"]:
+                if c in df.columns:
+                    df.rename(columns={c: "Question"}, inplace=True)
+                    break
+
+        # 4. 統一 圖片 (Image) 欄位
+        if "Image" not in df.columns:
+            for c in ["圖片", "圖檔"]:
+                if c in df.columns:
+                    df.rename(columns={c: "Image"}, inplace=True)
+                    break
 
         # 定義選項映射表 (Label -> 可能的欄位名)
         # 優先順序：選項一 > 選項1 > Option A > A
@@ -44,7 +58,7 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
             ('E', ['選項五', '選項5', 'OptionE', 'E', 'qp_a5', '答案選項5'])
         ]
 
-        # 3. 處理正確答案 (Answer)
+        # 5. 處理正確答案 (Answer)
         if "Answer" not in df.columns:
             # 策略 A: 優先找「正確選項」或「答案」欄位
             ans_col = None
@@ -84,7 +98,7 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
                     if c in df.columns:
                         df[c] = df[c].apply(lambda x: str(x).lstrip('*').lstrip('＊') if pd.notna(x) else x)
 
-        # 4. 強力打包選項 (Choices)
+        # 6. 強力打包選項 (Choices)
         if "Choices" not in df.columns:
             def universal_pack(row):
                 choices = []
@@ -103,14 +117,14 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 
             df["Choices"] = df.apply(universal_pack, axis=1)
 
-        # 5. 處理詳解
+        # 7. 處理詳解
         if "Explanation" not in df.columns:
             for c in ["解答說明", "解析", "詳解", "qp_explain"]:
                 if c in df.columns:
                     df["Explanation"] = df[c]
                     break
         
-        # 6. 處理題型 (Type)
+        # 8. 處理題型 (Type)
         if "Type" not in df.columns:
             if "題型" in df.columns:
                 df["Type"] = df["題型"]
@@ -118,7 +132,7 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
                 # 自動判斷：答案長度 > 1 視為複選 (MC)，否則單選 (SC)
                 df["Type"] = df["Answer"].apply(lambda x: "MC" if len(str(x)) > 1 else "SC")
 
-        # 7. 處理標籤 (Tag)
+        # 9. 處理標籤 (Tag)
         if "Tag" not in df.columns:
             for c in ["章節", "分類", "科目", "AI分類章節", "qp_ch"]:
                 if c in df.columns:
@@ -152,11 +166,12 @@ def normalize_bank_df(df: pd.DataFrame, sheet_name: str | None = None, source_fi
         df["SourceSheet"] = (sheet_name or "").strip()
         
         # 確保必要欄位存在 (防止清洗失敗)
-        for col in ["Explanation", "Tag", "Image", "Answer"]:
+        for col in ["Explanation", "Tag", "Image", "Answer", "Question"]:
             if col not in df.columns: df[col] = ""
 
         # 刪除選項過少的廢題
-        df = df[df["Choices"].apply(lambda x: len(x) >= 2)].reset_index(drop=True)
+        if "Choices" in df.columns:
+            df = df[df["Choices"].apply(lambda x: len(x) >= 2)].reset_index(drop=True)
 
     return df
 
@@ -221,12 +236,18 @@ def sample_paper(df, n, random_order=True, shuffle_options=True):
     n = min(n, len(df))
     if n <= 0: return []
 
-    # 直接使用處理好的 Choices 與 Answer
+    # 1. 直接抽題
     rows = df.sample(n=n, replace=False)
     if random_order: rows = rows.sample(frac=1)
 
     questions = []
     for _, r in rows.iterrows():
+        # 確保 Question 欄位存在
+        q_text = r.get("Question")
+        if not q_text or pd.isna(q_text):
+            # 嘗試找「題目」或 fallback
+            q_text = r.get("題目", "")
+            
         choices = r.get("Choices", [])
         if not choices: continue
 
@@ -237,13 +258,10 @@ def sample_paper(df, n, random_order=True, shuffle_options=True):
         raw_ans_str = str(r.get("Answer", "")).upper().strip() # "A" or "AB"
         
         # 建立舊 Label 對映表
-        # current_choices = [('A', '內容A'), ('B', '內容B')...]
-        # 我們需要知道 'A' 對應到哪個內容
         label_to_text = {lab: txt for lab, txt in current_choices}
 
         # 若需要洗牌選項
         if shuffle_options:
-            # 只洗內容，Label 重排
             items = [txt for _, txt in current_choices]
             random.shuffle(items)
             
@@ -255,12 +273,7 @@ def sample_paper(df, n, random_order=True, shuffle_options=True):
                 new_lab = chr(ord('A') + idx)
                 new_choices.append((new_lab, txt))
                 
-                # 如果這個 txt 原本是答案之一，那新的 Label 就是答案
-                # 這裡要反查：這個 txt 原本是哪個 Label? 
-                # 比較安全的方法是檢查這個 txt 是否原本被標記為正確
-                # 但我們只有 raw_ans_str (e.g. "AC")
-                
-                # 方法：找出這個 txt 原本的 label
+                # 反查舊 Label
                 orig_label = None
                 for ol, ot in label_to_text.items():
                     if ot == txt:
@@ -274,14 +287,14 @@ def sample_paper(df, n, random_order=True, shuffle_options=True):
             final_ans = new_ans_set
         else:
             final_choices = current_choices
-            final_ans = set(raw_ans_str) # "A", "C"
+            final_ans = set(raw_ans_str) 
 
         questions.append({
-            "ID": r["ID"],
-            "Question": r["Question"],
+            "ID": r.get("ID"),
+            "Question": q_text, # 使用安全取得的文字
             "Type": str(r.get("Type", "SC")).upper(),
             "Choices": final_choices,
-            "Answer": final_ans, # set of labels
+            "Answer": final_ans, 
             "Explanation": r.get("Explanation", ""),
             "Image": r.get("Image", ""),
             "Tag": r.get("Tag", ""),
