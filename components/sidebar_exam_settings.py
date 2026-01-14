@@ -9,8 +9,8 @@ def render_exam_settings(mode: str = "practice"):
     - mock(模擬考模式)：改成「證照類別(人身/投資型/外幣) + 科目」，並鎖定題數/時間（由 MOCK_SPECS 套用）
     
     回傳的 dict 會同時包含：
-    - practice：bank_type / merge_all / bank_source / n_questions
-    - mock：cert_type / subject / bank_path / mock_sections / mock_time_limit_sec
+    - practice：bank_type / merge_all / bank_source / n_questions / random_order
+    - mock：cert_type / subject / bank_path / mock_sections / mock_time_limit_sec / random_order
     頁面端用 mode 決定讀哪一套欄位即可。
     """
     st.subheader("題庫與考試設定")
@@ -19,6 +19,8 @@ def render_exam_settings(mode: str = "practice"):
     if mode not in ("practice", "mock"):
         mode = "practice"
 
+    # 🟢【修正】：新增「題目亂序」選項，並確保回傳此 Key
+    random_order = st.checkbox("題目亂序", value=True, key=f"sb_random_{mode}")
     shuffle_options = st.checkbox("選項洗牌", value=True, key=f"sb_shuffle_{mode}")
     show_image = st.checkbox("顯示圖片", value=True, key=f"sb_showimg_{mode}")
 
@@ -49,6 +51,7 @@ def render_exam_settings(mode: str = "practice"):
             "merge_all": merge_all,
             "bank_source": bank_source,
             "n_questions": n_questions,
+            "random_order": random_order,    # ✅ 補上這個 Key
             "shuffle_options": shuffle_options,
             "show_image": show_image,
         }
@@ -103,6 +106,7 @@ def render_exam_settings(mode: str = "practice"):
         "mock_spec": spec,
         "mock_sections": mock_sections,
         "mock_time_limit_sec": mock_time_limit_sec,
+        "random_order": random_order,   # ✅ 補上這個 Key (雖然模擬考通常強制亂序，但補上可避免報錯)
         "shuffle_options": shuffle_options,
         "show_image": show_image,
 
