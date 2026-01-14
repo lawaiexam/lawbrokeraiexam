@@ -10,7 +10,7 @@ from .github_handler import gh_download_bytes
 # ==============================================================================
 def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    通用資料清洗函式 (整合 HOTFIX V4 邏輯)
+    通用資料清洗函式 (整合 HOTFIX V5 邏輯)
     統一處理：欄位去除空白、ID標準化、題目映射、Answer/Option 映射、星號答案提取、打包 Choices
     """
     if df is None or df.empty:
@@ -25,16 +25,14 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 
         # 2. 統一 ID 欄位
         if "ID" not in df.columns:
-            # 常見的編號欄位名稱
             for c in ["編號", "題目編號", "題號", "qp_id"]:
                 if c in df.columns:
                     df.rename(columns={c: "ID"}, inplace=True)
                     break
-            # 如果還是沒有，自動產生
             if "ID" not in df.columns:
                 df["ID"] = range(1, len(df) + 1)
 
-        # 3. 統一 題目 (Question) 欄位 [🔴 修正重點：補上這段映射]
+        # 3. 統一 題目 (Question) 欄位
         if "Question" not in df.columns:
             for c in ["題目", "題幹", "題目內容", "qp_title", "問題"]:
                 if c in df.columns:
@@ -49,7 +47,6 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
                     break
 
         # 定義選項映射表 (Label -> 可能的欄位名)
-        # 優先順序：選項一 > 選項1 > Option A > A
         option_map_config = [
             ('A', ['選項一', '選項1', 'OptionA', 'A', 'qp_a1', '答案選項1']),
             ('B', ['選項二', '選項2', 'OptionB', 'B', 'qp_a2', '答案選項2']),
@@ -58,47 +55,55 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
             ('E', ['選項五', '選項5', 'OptionE', 'E', 'qp_a5', '答案選項5'])
         ]
 
-        # 5. 處理正確答案 (Answer)
-        if "Answer" not in df.columns:
-            # 策略 A: 優先找「正確選項」或「答案」欄位
-            ans_col = None
-            for c in ["正確選項", "答案", "標準答案", "qp_right", "CorrectAnswer"]:
-                if c in df.columns:
-                    ans_col = c
-                    break
+        # 5. 處理正確答案 (Answer) - 混合策略
+        # 步驟 5a: 先嘗試標準化現有的答案欄位 (如果有)
+        ans_col = None
+        for c in ["Answer", "正確選項", "答案", "標準答案", "qp_right", "CorrectAnswer"]:
+            if c in df.columns:
+                ans_col = c
+                break
+        
+        if ans_col:
+            def normalize_answer(val):
+                val_str = str(val).strip().upper()
+                mapping = {'1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E'}
+                if val_str.endswith(".0"): val_str = val_str[:-2]
+                return mapping.get(val_str, val_str)
             
-            if ans_col:
-                def normalize_answer(val):
-                    val_str = str(val).strip().upper()
-                    # 數字轉代號 (1->A, 2->B...)
-                    mapping = {'1': 'A', '2': 'B', '3': 'C', '4': 'D', '5': 'E'}
-                    # 處理浮點數 (如 1.0)
-                    if val_str.endswith(".0"): val_str = val_str[:-2]
-                    return mapping.get(val_str, val_str)
-                df["Answer"] = df[ans_col].apply(normalize_answer)
-            
-            # 策略 B: 如果找不到欄位，改去選項裡找星號 * (常見於人身/投資型)
-            else:
-                def extract_star_answer(row):
-                    stars = []
-                    for label, possible_cols in option_map_config:
-                        for col in possible_cols:
-                            if col in row and pd.notna(row[col]):
-                                txt = str(row[col]).strip()
-                                # 檢查開頭是否有星號
-                                if txt.startswith("*") or txt.startswith("＊"):
-                                    stars.append(label)
-                    return "".join(stars)
-                
-                df["Answer"] = df.apply(extract_star_answer, axis=1)
+            # 將標準化後的結果存入 "Answer"
+            df["Answer"] = df[ans_col].apply(normalize_answer)
+        else:
+            # 若完全沒答案欄位，先初始化為空字串，待會由星號填補
+            df["Answer"] = ""
 
-                # ⚠️ 重要：移除選項文字中的星號，避免洩題
-                all_opt_cols = [col for _, cols in option_map_config for col in cols]
-                for c in all_opt_cols:
-                    if c in df.columns:
-                        df[c] = df[c].apply(lambda x: str(x).lstrip('*').lstrip('＊') if pd.notna(x) else x)
+        # 步驟 5b: 掃描選項中的星號 (補強邏輯：即使有答案欄位，若為空值也嘗試用星號補)
+        def extract_star_answer(row):
+            # 如果原本已經有有效答案，就直接用
+            current_ans = str(row.get("Answer", "")).strip()
+            if current_ans and current_ans.lower() != "nan":
+                return current_ans
+            
+            # 否則掃描選項找星號
+            stars = []
+            for label, possible_cols in option_map_config:
+                for col in possible_cols:
+                    if col in row and pd.notna(row[col]):
+                        txt = str(row[col]).strip()
+                        if txt.startswith("*") or txt.startswith("＊"):
+                            stars.append(label)
+            return "".join(stars)
+
+        df["Answer"] = df.apply(extract_star_answer, axis=1)
+
+        # 步驟 5c: 移除選項文字中的星號 (無論如何都要執行，保持介面乾淨)
+        all_opt_cols = [col for _, cols in option_map_config for col in cols]
+        for c in all_opt_cols:
+            if c in df.columns:
+                # 只移除開頭的星號與空白
+                df[c] = df[c].apply(lambda x: str(x).lstrip('*').lstrip('＊').strip() if pd.notna(x) else x)
 
         # 6. 強力打包選項 (Choices)
+        # 注意：此時選項已無星號，Answer 已提取完畢
         if "Choices" not in df.columns:
             def universal_pack(row):
                 choices = []
@@ -107,7 +112,6 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
                     for col in possible_cols:
                         if col in row and pd.notna(row[col]):
                             val = str(row[col]).strip()
-                            # 排除 nan 或空字串
                             if val and val.lower() != "nan":
                                 found_text = val
                                 break 
@@ -129,7 +133,6 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
             if "題型" in df.columns:
                 df["Type"] = df["題型"]
             else:
-                # 自動判斷：答案長度 > 1 視為複選 (MC)，否則單選 (SC)
                 df["Type"] = df["Answer"].apply(lambda x: "MC" if len(str(x)) > 1 else "SC")
 
         # 9. 處理標籤 (Tag)
@@ -146,17 +149,11 @@ def clean_and_normalize_df(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ==============================================================================
-# 舊有相容層 (保留以免影響舊代碼，但內部改為呼叫新邏輯)
+# 舊有相容層
 # ==============================================================================
 
 def normalize_bank_df(df: pd.DataFrame, sheet_name: str | None = None, source_file: str | None = None) -> pd.DataFrame:
-    """
-    舊版正規化函式，現已升級為呼叫 clean_and_normalize_df
-    """
-    # 先做強力清洗
     df = clean_and_normalize_df(df)
-    
-    # 補上來源資訊 (舊版邏輯)
     if not df.empty:
         if "Tag" not in df.columns or df["Tag"].all() == "":
              if sheet_name:
@@ -165,11 +162,9 @@ def normalize_bank_df(df: pd.DataFrame, sheet_name: str | None = None, source_fi
         df["SourceFile"] = (source_file or "").strip()
         df["SourceSheet"] = (sheet_name or "").strip()
         
-        # 確保必要欄位存在 (防止清洗失敗)
         for col in ["Explanation", "Tag", "Image", "Answer", "Question"]:
             if col not in df.columns: df[col] = ""
 
-        # 刪除選項過少的廢題
         if "Choices" in df.columns:
             df = df[df["Choices"].apply(lambda x: len(x) >= 2)].reset_index(drop=True)
 
@@ -180,14 +175,9 @@ def normalize_bank_df(df: pd.DataFrame, sheet_name: str | None = None, source_fi
 # ==============================================================================
 
 def load_bank(file_like):
-    """
-    讀取 Excel 檔案，支援多 Sheet 合併
-    """
     try:
         xls = pd.ExcelFile(file_like)
         dfs = []
-        
-        # 嘗試取得檔名
         try:
             source_file = getattr(file_like, "name", None) or ""
             source_file = source_file.replace("\\", "/").split("/")[-1]
@@ -198,12 +188,8 @@ def load_bank(file_like):
             if any(x in sh for x in ["修改紀錄", "空白", "附錄", "Sheet", "工作表"]):
                 if "空白" in sh or "附錄" in sh or "修改" in sh:
                     continue
-                
             raw = pd.read_excel(xls, sheet_name=sh)
-            
-            # 呼叫整合後的正規化函式
             norm = normalize_bank_df(raw, sheet_name=sh, source_file=source_file)
-            
             if not norm.empty:
                 dfs.append(norm)
 
@@ -245,7 +231,6 @@ def sample_paper(df, n, random_order=True, shuffle_options=True):
         # 確保 Question 欄位存在
         q_text = r.get("Question")
         if not q_text or pd.isna(q_text):
-            # 嘗試找「題目」或 fallback
             q_text = r.get("題目", "")
             
         choices = r.get("Choices", [])
@@ -291,7 +276,7 @@ def sample_paper(df, n, random_order=True, shuffle_options=True):
 
         questions.append({
             "ID": r.get("ID"),
-            "Question": q_text, # 使用安全取得的文字
+            "Question": q_text,
             "Type": str(r.get("Type", "SC")).upper(),
             "Choices": final_choices,
             "Answer": final_ans, 
