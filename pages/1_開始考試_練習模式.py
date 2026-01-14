@@ -35,56 +35,28 @@ st.title("📝 開始考試 - 練習模式")
 # 1. 側邊欄：題庫選擇與參數設定
 # ==========================================
 with st.sidebar:
+    # A. 基礎題庫選擇
     base_settings = render_exam_settings(mode="practice")
     
-    # 載入原始資料 (Raw Data)
+    # 載入與清洗資料
     raw_df = load_bank_df(
         base_settings["bank_type"],
         base_settings["merge_all"],
         base_settings["bank_source"],
     )
     
-    # 資料清洗
     try:
         if raw_df is not None and not raw_df.empty:
-            # 強制重新清洗，確保邏輯應用
             raw_df = dl.clean_and_normalize_df(raw_df)
-    except Exception as e:
-        st.error(f"資料清洗發生錯誤: {e}")
-
-    # ======================================
-    # 🛠️ 資料診斷室 (Debug Tool)
-    # ======================================
-    with st.expander("🛠️ 資料診斷室 (若答案未知請點此)", expanded=False):
-        if st.button("🔄 強制清除快取並重整", type="primary"):
-            st.cache_data.clear()
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
-
-        if raw_df is not None and not raw_df.empty:
-            st.write(f"**偵測到的欄位名稱：**")
-            st.code(list(raw_df.columns))
-            
-            st.write("**清洗後資料預覽 (前 3 筆)：**")
-            # 檢查關鍵欄位
-            debug_cols = ["ID", "Question", "Answer", "Choices"]
-            existing_cols = [c for c in debug_cols if c in raw_df.columns]
-            st.dataframe(raw_df[existing_cols].head(3))
-            
-            # 檢查 Answer 狀況
-            empty_ans = raw_df["Answer"].isna() | (raw_df["Answer"] == "")
-            st.write(f"❌ 答案空白的題數：{empty_ans.sum()} / {len(raw_df)}")
-            if empty_ans.sum() > 0:
-                st.error("警告：系統無法偵測到部分題目的答案，請檢查上方欄位名稱是否正確。")
-        else:
-            st.warning("尚未載入資料")
+    except Exception:
+        pass
 
     # B. 進階篩選與參數
     if raw_df is not None and not raw_df.empty:
         st.divider()
         st.subheader("3. 進階篩選與設定")
         
+        # 標籤篩選
         all_tags = get_all_tags(raw_df)
         selected_tags = []
         if all_tags:
@@ -96,6 +68,7 @@ with st.sidebar:
             if not selected_tags:
                 st.caption("（未選擇則預設為全部範圍）")
         
+        # 題數設定
         max_q = len(raw_df)
         if selected_tags:
             approx_count = len(filter_by_tags(raw_df, selected_tags))
@@ -113,10 +86,12 @@ with st.sidebar:
             key="sb_nq_practice"
         )
         
+        # 亂序設定
         random_order = st.checkbox("題目隨機亂序", value=True, key="sb_random_practice")
         
         st.divider()
         
+        # C. 確認按鈕
         start_btn = st.button("🚀 開始/重置 練習", type="primary", use_container_width=True)
         
         if start_btn:
@@ -128,13 +103,15 @@ with st.sidebar:
                 st.error("篩選後無題目，請調整篩選條件。")
                 st.session_state.practice_started = False
             else:
+                # 建立考卷 (強制不洗牌選項)
                 paper = build_paper(
                     final_df,
                     n_questions=n_questions,
                     random_order=random_order,
-                    shuffle_options=False # 練習模式不洗牌選項
+                    shuffle_options=False 
                 )
                 
+                # 存入 Session
                 st.session_state.df = final_df
                 st.session_state.practice_shuffled = paper
                 st.session_state.practice_idx = 0
@@ -142,6 +119,7 @@ with st.sidebar:
                 st.session_state.practice_correct = 0
                 st.session_state.hints = {}
                 
+                # 記錄設定
                 st.session_state.practice_settings = {
                     "bank_label": base_settings["bank_source"] or base_settings["bank_type"],
                     "tags": selected_tags,
@@ -178,16 +156,18 @@ if not paper:
 p_set = st.session_state.practice_settings
 st.caption(f"📚 題庫：{p_set.get('bank_label')} ｜ 🔖 範圍：{', '.join(p_set.get('tags')) if p_set.get('tags') else '全部'} ｜ 📝 總題數：{p_set.get('count')}")
 
+# 取得目前題目
 total = len(paper)
 i = st.session_state.practice_idx
 q = paper[i]
 
+# 進度條
 progress = (i + 1) / total
 st.progress(progress, text=f"第 {i+1} / {total} 題 （答對：{st.session_state.practice_correct}）")
 
 st.divider()
 
-# AI 提示
+# AI 提示 (作答前)
 if ai.gemini_ready():
     c_hint, _ = st.columns([1, 4])
     with c_hint:
@@ -200,7 +180,7 @@ if ai.gemini_ready():
     if q["ID"] in st.session_state.hints:
         st.info(st.session_state.hints[q["ID"]])
 
-# 題目
+# 題目渲染
 picked_labels = render_question(
     q,
     show_image=p_set.get("show_image", True),
@@ -236,11 +216,17 @@ if is_answered:
     if user_ans == gold:
         st.success("✅ 答對了！")
     else:
-        st.error(f"❌ 答錯了。正確答案：{', '.join(sorted(list(gold))) or '(未知)'}")
+        # 🟢 修改點：只顯示答錯了，不顯示 (未知)
+        st.error("❌ 答錯了。")
         
-    if str(q.get("Explanation", "")).strip():
-        st.caption(f"📖 題庫詳解：{q['Explanation']}")
+    # 🟢 修改點：強化詳解顯示，作為正確答案的來源
+    expl_text = str(q.get("Explanation", "")).strip()
+    if expl_text:
+        st.info(f"📖 **題庫解析 / 正確答案**：\n\n{expl_text}")
+    else:
+        st.warning("此題庫未提供解析，您可以點擊下方按鈕請 AI 幫忙解答。")
 
+    # AI 詳解 (作答後)
     if ai.gemini_ready():
         st.write("")
         if st.button(f"🧠 生成 AI 詳解", key=f"ai_explain_practice_{i}"):
@@ -252,11 +238,14 @@ if is_answered:
                 "Explanation": q.get("Explanation", "")
             }
             ck, sys, usr = ai.build_explain_prompt(q_data)
+            
             with st.spinner("AI 正在分析..."):
                 explain = ai.gemini_generate_cached(ck, sys, usr)
+            
             st.markdown("### 🤖 AI 解析")
             st.info(explain)
 
+# 翻頁按鈕
 st.divider()
 cols = st.columns([1, 1])
 with cols[0]:
