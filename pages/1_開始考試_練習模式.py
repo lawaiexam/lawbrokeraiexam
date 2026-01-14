@@ -189,16 +189,32 @@ picked_labels = render_question(
 
 is_answered = q["ID"] in st.session_state.practice_answers
 
+# ==========================================
+# 🟢 修正點：統一正確答案的格式比對
+# ==========================================
+def normalize_answer_set(ans_data):
+    """將答案資料 (str/list) 統一轉為乾淨的 Set {'A', 'B'}"""
+    if not ans_data:
+        return set()
+    
+    # 如果是字串 (例如 "ABC" 或 "A,B")
+    if isinstance(ans_data, str):
+        # 移除空白、逗號、分號
+        clean = ans_data.upper().replace(" ", "").replace(",", "").replace(";", "")
+        return set(clean) # "ABC" -> {'A', 'B', 'C'}
+    
+    # 如果已經是 list/tuple/set
+    return set(ans_data)
+
+# 準備正確答案 Set
+gold = normalize_answer_set(q.get("Answer"))
+
 # 提交按鈕
 if not is_answered:
     if st.button("提交這題", key=f"practice_submit_{i}", type="primary"):
         st.session_state.practice_answers[q["ID"]] = picked_labels
         
-        raw_ans = q.get("Answer")
-        if isinstance(raw_ans, str): gold = {raw_ans}
-        elif isinstance(raw_ans, (list, tuple)): gold = set(raw_ans)
-        else: gold = set()
-
+        # 比對
         if picked_labels == gold:
             st.session_state.practice_correct += 1
         
@@ -208,21 +224,21 @@ if not is_answered:
 if is_answered:
     user_ans = st.session_state.practice_answers[q["ID"]]
     
-    raw_ans = q.get("Answer")
-    if isinstance(raw_ans, str): gold = {raw_ans}
-    elif isinstance(raw_ans, (list, tuple)): gold = set(raw_ans)
-    else: gold = set()
-
     if user_ans == gold:
         st.success("✅ 答對了！")
     else:
-        # 🟢 修改點：只顯示答錯了，不顯示 (未知)
         st.error("❌ 答錯了。")
         
-    # 🟢 修改點：強化詳解顯示，作為正確答案的來源
+    # 詳解顯示
     expl_text = str(q.get("Explanation", "")).strip()
+    
+    # 顯示正確答案代號 + 詳解
+    ans_str = ", ".join(sorted(list(gold)))
+    
+    st.info(f"👉 **正確答案：{ans_str}**")
+    
     if expl_text:
-        st.info(f"📖 **題庫解析 / 正確答案**：\n\n{expl_text}")
+        st.markdown(f"**📖 題庫解析**：\n\n{expl_text}")
     else:
         st.warning("此題庫未提供解析，您可以點擊下方按鈕請 AI 幫忙解答。")
 
