@@ -1,4 +1,5 @@
 import time
+import pandas as pd  # ✅ 確保引入 pandas
 import streamlit as st
 
 from services.state_service import ensure_state
@@ -37,6 +38,45 @@ if df is None or df.empty:
     st.warning("尚未載入題庫，請在左側選擇題庫。")
     st.stop()
 
+# ==========================================
+# 🚑 HOTFIX: 資料格式救援補丁 (Data Schema Patch)
+# ==========================================
+# 原因：新上傳的題庫是 Raw Data (選項一, 選項二...)，但 UI 需要 'Choices' 與 'ID' 欄位。
+
+# 1. 確保 ID 欄位存在
+if "ID" not in df.columns and "編號" in df.columns:
+    df["ID"] = df["編號"] # 將中文編號複製一份給 ID
+
+# 2. 確保 Choices 欄位存在 (打包選項)
+if "Choices" not in df.columns:
+    def pack_choices(row):
+        options = []
+        # 定義映射：顯示代號 -> 可能的欄位名稱列表
+        mapping = [
+            ("A", ["選項一", "Option A", "A"]),
+            ("B", ["選項二", "Option B", "B"]),
+            ("C", ["選項三", "Option C", "C"]),
+            ("D", ["選項四", "Option D", "D"]),
+            ("E", ["選項五", "Option E", "E"])
+        ]
+        
+        for label, cols in mapping:
+            for col in cols:
+                # 如果欄位存在且內容不為空 (NaN)
+                if col in row and pd.notna(row[col]):
+                    val = str(row[col]).strip()
+                    if val: 
+                        options.append((label, val))
+                    break # 找到對應欄位就跳出，繼續找下一個代號
+        return options
+
+    # 套用轉換函數
+    df["Choices"] = df.apply(pack_choices, axis=1)
+
+# ==========================================
+# 🚑 補丁結束
+# ==========================================
+
 st.session_state.df = df
 
 # 顯示用名稱（練習模式保留你原本邏輯）
@@ -49,42 +89,65 @@ else:
 
 st.session_state.current_bank_name = bank_label
 
-# ========= 章節複選（只存在於練習模式） =========
+# ========= 篩選器 (Tags) =========
 all_tags = get_all_tags(df)
-picked_tags = st.multiselect("過濾章節", options=all_tags)
+selected_tags = []
+if all_tags:
+    with st.expander("進階篩選（依標籤）"):
+        selected_tags = st.multiselect("過濾特定主題：", options=all_tags)
 
-filtered = filter_by_tags(df, picked_tags)
-if filtered is None or filtered.empty:
-    st.warning("此條件下沒有題目。")
+filtered = filter_by_tags(df, selected_tags)
+if filtered.empty:
+    st.warning("篩選後沒有題目。")
     st.stop()
 
-# ========= 生成練習題 =========
-if st.button("生成練習題", type="primary"):
-    st.session_state.paper = build_paper(
-        filtered,
-        settings["n_questions"],
-        random_order=True,
-        shuffle_options=settings["shuffle_options"],
-    )
+st.caption(f"目前題庫：{bank_label}｜共 {len(filtered)} 題")
+
+# ========= 練習模式 State 初始化 =========
+if "practice_idx" not in st.session_state:
     st.session_state.practice_idx = 0
-    st.session_state.practice_correct = 0
+if "practice_shuffled" not in st.session_state:
+    st.session_state.practice_shuffled = []
+if "practice_answers" not in st.session_state:
     st.session_state.practice_answers = {}
-    st.session_state.hints = {}   # ✅ 確保存在
-    st.rerun()
+if "practice_correct" not in st.session_state:
+    st.session_state.practice_correct = 0
+if "hints" not in st.session_state:
+    st.session_state.hints = {}
 
-paper = st.session_state.get("paper")
+# 當題庫變更時重置
+if st.session_state.get("last_bank_sig") != (bank_label, len(filtered), tuple(selected_tags)):
+    # 重新洗牌
+    paper = build_paper(
+        filtered,
+        n_questions=len(filtered),
+        random_order=settings["random_order"],
+        shuffle_options=settings["shuffle_options"]
+    )
+    st.session_state.practice_shuffled = paper
+    st.session_state.practice_idx = 0
+    st.session_state.practice_answers = {}
+    st.session_state.practice_correct = 0
+    st.session_state.hints = {}
+    st.session_state.last_bank_sig = (bank_label, len(filtered), tuple(selected_tags))
+
+paper = st.session_state.practice_shuffled
 if not paper:
-    st.info("請先按「生成練習題」。")
+    st.info("沒有題目。")
     st.stop()
 
-# ========= 題目顯示 =========
+# ========= 顯示題目 (逐題模式) =========
+total = len(paper)
 i = st.session_state.practice_idx
 q = paper[i]
 
-st.markdown(f"### 第 {i+1} / {len(paper)} 題")
-st.markdown(q["Question"])
+# 進度條
+progress = (i + 1) / total
+st.progress(progress, text=f"第 {i+1} / {total} 題 （答對：{st.session_state.practice_correct}）")
 
-# ========= AI 提示（維持原本行為） =========
+st.divider()
+
+# AI Hint
 if ai.gemini_ready():
     if st.button(f"💡 AI 提示（Q{i+1}）", key=f"ai_hint_practice_{i}"):
         ck, sys, usr = ai.build_hint_prompt(q)
@@ -117,17 +180,10 @@ if st.button("提交這題", key=f"practice_submit_{i}"):
 # ========= 導航 =========
 cols = st.columns([1, 1])
 with cols[0]:
-    if st.button("➡️ 下一題", key=f"practice_next_{i}"):
-        if i < len(paper) - 1:
-            st.session_state.practice_idx += 1
-            st.rerun()
-        else:
-            st.success(f"🎉 完成練習：{st.session_state.practice_correct}/{len(paper)}")
-
+    if st.button("上一題", disabled=(i == 0)):
+        st.session_state.practice_idx = max(0, i - 1)
+        st.rerun()
 with cols[1]:
-    if st.button("🔁 重新練習"):
-        st.session_state.practice_idx = 0
-        st.session_state.practice_correct = 0
-        st.session_state.practice_answers = {}
-        st.session_state.hints = {}
+    if st.button("下一題", disabled=(i == total - 1)):
+        st.session_state.practice_idx = min(total - 1, i + 1)
         st.rerun()
