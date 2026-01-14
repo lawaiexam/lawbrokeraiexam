@@ -14,7 +14,7 @@ from components.sidebar_exam_settings import render_exam_settings
 from components.question_render import render_question
 
 # ==========================================
-# 🟢 設定區：權重與章節映射
+# 🟢 設定區
 # ==========================================
 NEW_EXAM_WEIGHTS = {
     "人身保險業務員資格測驗": {
@@ -207,7 +207,7 @@ if n_questions <= 0:
 try:
     bank_path = CERT_CATALOG[settings["cert_type"]]["subjects"][section_name]
 except Exception:
-    st.error(f"找不到題庫映射：{settings['cert_type']} → {section_name}")
+    st.error(f"找不到題庫映射：{settings.get('cert_type', '未知')} → {section_name}")
     st.stop()
 
 df = load_bank_df(settings.get("cert_type", ""), merge_all=False, bank_source_path=bank_path)
@@ -222,13 +222,11 @@ if df is None or df.empty:
 try:
     df.columns = df.columns.str.strip()
 
-    # 1. 統一 ID
     if "ID" not in df.columns:
         if "編號" in df.columns: df["ID"] = df["編號"]
         elif "題目編號" in df.columns: df["ID"] = df["題目編號"]
         else: df["ID"] = range(1, len(df) + 1)
 
-    # 定義映射: 支援中文(人身)與數字(投資型)
     option_map_config = [
         ('A', ['選項一', '選項1', 'Option A', 'A']),
         ('B', ['選項二', '選項2', 'Option B', 'B']),
@@ -237,7 +235,6 @@ try:
         ('E', ['選項五', '選項5', 'Option E', 'E'])
     ]
 
-    # 2. 處理 Answer
     if "Answer" not in df.columns:
         if "正確選項" in df.columns:
             def normalize_answer(val):
@@ -255,13 +252,11 @@ try:
                 return ""
             df["Answer"] = df.apply(extract_star_answer, axis=1)
 
-            # 洗掉星號
             all_opt_cols = [col for _, cols in option_map_config for col in cols]
             for c in all_opt_cols:
                 if c in df.columns:
                     df[c] = df[c].apply(lambda x: str(x).lstrip('*') if pd.notna(x) else x)
 
-    # 3. 打包 Choices
     if "Choices" not in df.columns:
         def universal_pack(row):
             choices = []
@@ -277,6 +272,9 @@ try:
             return choices
         df["Choices"] = df.apply(universal_pack, axis=1)
 
+    if "Explanation" not in df.columns and "解答說明" in df.columns:
+        df["Explanation"] = df["解答說明"]
+
 except Exception as e:
     st.error(f"資料格式轉換失敗：{e}")
     st.stop()
@@ -286,21 +284,21 @@ except Exception as e:
 
 st.session_state.df = df
 filtered = df
-exam_label = f"{settings['cert_type']}｜模擬考"
+exam_label = f"{settings.get('cert_type')}｜模擬考"
 st.session_state.current_bank_name = exam_label
 
 with st.expander("本次模擬考規格", expanded=True):
-    st.write(f"- 類別：{settings['cert_type']}")
+    st.write(f"- 類別：{settings.get('cert_type')}")
     st.write(f"- 模式：{'兩節連考' if len(sections) > 1 else '單節'}")
     
     subject_id = None
-    for kw, sid in SUBJECT_IDENTIFIER.get(settings["cert_type"], {}).items():
+    for kw, sid in SUBJECT_IDENTIFIER.get(settings.get("cert_type"), {}).items():
         if kw in section_name:
             subject_id = sid
             break
             
     if subject_id:
-        weights = NEW_EXAM_WEIGHTS[settings["cert_type"]].get(subject_id, {})
+        weights = NEW_EXAM_WEIGHTS[settings.get("cert_type")].get(subject_id, {})
         st.info(f"💡 本節 ({section_name}) 採用權重抽樣：\n" + ", ".join([f"{k}:{v}%" for k,v in weights.items()]))
     else:
         st.write("💡 本節採用自然分佈抽樣")
@@ -325,12 +323,13 @@ def _reset_whole_mock_exam():
 
 with colA:
     if st.button("開始本節", type="primary"):
+        # 🛠️ 這裡也加上了防呆 .get()
         st.session_state.paper = build_weighted_paper_v2(
             filtered,
-            settings["cert_type"],
+            settings.get("cert_type"),
             section_name,
             n_questions,
-            shuffle_options=settings["shuffle_options"]
+            shuffle_options=settings.get("shuffle_options", False) # ✅ 防呆修正
         )
         st.session_state.answers = {}
         st.session_state.started = True
@@ -367,7 +366,12 @@ if not st.session_state.get("show_results"):
     st.subheader("作答區")
     for idx, q in enumerate(paper, start=1):
         with st.expander(f"第 {idx} 題", expanded=(idx == 1)):
-            picked = render_question(q, show_image=settings["show_image"], answer_key=f"mock_s{sec_idx}_ans_{q['ID']}")
+            # 顯示題目，加上 .get() 防呆
+            picked = render_question(
+                q,
+                show_image=settings.get("show_image", False), 
+                answer_key=f"mock_s{sec_idx}_ans_{q['ID']}"
+            )
             st.session_state.answers[q["ID"]] = picked
 
     if st.button("交卷（本節）", type="primary"):
@@ -426,7 +430,7 @@ all_wrong_df = pd.concat([s["wrong_df"] for s in section_results], ignore_index=
 all_results_df = pd.concat([s["results_df"] for s in section_results], ignore_index=True) if section_results else pd.DataFrame()
 
 st.session_state.mock_summary = {
-    "cert_type": settings["cert_type"],
+    "cert_type": settings.get("cert_type"),
     "sections": [{"name": s["section"], "score": s["score"], "correct": s["correct"], "total": s["total"]} for s in section_results],
     "section_scores": section_scores,
     "total_score": total_score,
