@@ -4,10 +4,10 @@ def render_login_form():
     st.markdown("## 🔐 錠嵂 AI 考照系統 - 員工登入")
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.info("**系統資訊**\n\n請輸入您的員工業代與密碼進行登入")
+        st.info("**系統資訊**\n\n請輸入您的員工業代/Email與密碼進行登入")
     with col2:
         with st.form("login_form"):
-            emp_id = st.text_input("員工編號 / 業務代碼")
+            emp_id = st.text_input("員工業代 / Email")
             password = st.text_input("密碼", type="password")
             ok = st.form_submit_button("登入", type="primary")
 
